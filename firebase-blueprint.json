@@ -1,0 +1,292 @@
+{
+  "entities": {
+    "Room": {
+      "title": "Room",
+      "description": "Campus hostel or guest house room inventory entry",
+      "type": "object",
+      "properties": {
+        "room_id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "room_number": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "floor_id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "floor_name": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "category_id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "category_name": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "bed_type": { "type": "string", "enum": ["Single", "Double", "Queen Size", "VIP", "Pending Verification"] },
+        "ac_type": { "type": "string", "enum": ["AC", "Non-AC", "Pending Verification"] },
+        "capacity": { "type": "integer" },
+        "building_allocation": { "type": "string", "enum": ["GENERAL", "CR_BUILDING"] },
+        "status": {
+          "type": "string",
+          "enum": ["AVAILABLE", "BOOKED", "OCCUPIED", "UNDER MAINTENANCE", "RESERVED", "ALLOCATED TO CR BUILDING", "INACTIVE"]
+        },
+        "is_active": { "type": "boolean" },
+        "verification_status": { "type": "string", "enum": ["VERIFIED", "PENDING_VERIFICATION"] },
+        "remarks": { "type": "string", "maxLength": 500 },
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "room_id",
+        "room_number",
+        "floor_id",
+        "floor_name",
+        "category_id",
+        "category_name",
+        "bed_type",
+        "ac_type",
+        "capacity",
+        "building_allocation",
+        "status",
+        "is_active",
+        "verification_status",
+        "remarks",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "Floor": {
+      "title": "Floor",
+      "description": "Hostel building floor metadata",
+      "type": "object",
+      "properties": {
+        "floor_id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "floor_number": { "type": "integer" },
+        "floor_name": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "description": { "type": "string", "maxLength": 300 },
+        "display_order": { "type": "integer" },
+        "is_active": { "type": "boolean" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["floor_id", "floor_number", "floor_name", "description", "display_order", "is_active", "created_at", "updated_at"]
+    },
+    "RoomCategory": {
+      "title": "RoomCategory",
+      "description": "Accommodation room category",
+      "type": "object",
+      "properties": {
+        "category_id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "category_name": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "bed_type": { "type": "string", "enum": ["Single", "Double", "Queen Size", "VIP", "Pending Verification"] },
+        "ac_type": { "type": "string", "enum": ["AC", "Non-AC", "Pending Verification"] },
+        "default_capacity": { "type": "integer" },
+        "description": { "type": "string", "maxLength": 300 },
+        "is_bookable": { "type": "boolean" },
+        "display_order": { "type": "integer" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["category_id", "category_name", "bed_type", "ac_type", "default_capacity", "description", "is_bookable", "display_order", "created_at", "updated_at"]
+    },
+    "RoomAllocation": {
+      "title": "RoomAllocation",
+      "description": "Building allocation history and CR Building assignment",
+      "type": "object",
+      "properties": {
+        "allocation_id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "room_id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "room_number": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "allocation_type": { "type": "string", "enum": ["GENERAL", "CR_BUILDING"] },
+        "allocated_to": { "type": "string", "maxLength": 120 },
+        "is_publicly_bookable": { "type": "boolean" },
+        "effective_from": { "type": "string", "maxLength": 32 },
+        "effective_to": { "type": "string", "maxLength": 32 },
+        "remarks": { "type": "string", "maxLength": 500 },
+        "updated_by": { "type": "string", "maxLength": 160 },
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["allocation_id", "room_id", "room_number", "allocation_type", "allocated_to", "is_publicly_bookable", "effective_from", "effective_to", "remarks", "updated_by", "created_at", "updated_at"]
+    },
+    "Booking": {
+      "title": "Booking",
+      "description": "Public room booking request and administrative review state",
+      "type": "object",
+      "properties": {
+        "booking_id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "booking_ref": { "type": "string", "minLength": 4, "maxLength": 48, "pattern": "^NADT-BLR-[0-9]{8}-[A-Z0-9]{4,8}$" },
+        "applicant_name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "organization": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "designation": { "type": "string", "maxLength": 120 },
+        "email": { "type": "string", "minLength": 3, "maxLength": 160 },
+        "mobile": { "type": "string", "minLength": 5, "maxLength": 30 },
+        "purpose": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "check_in_date": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+        "check_out_date": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+        "num_persons": { "type": "integer" },
+        "preferred_category": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "rooms_required": { "type": "integer" },
+        "assigned_room_ids": { "type": "array" },
+        "assigned_room_numbers": { "type": "array" },
+        "special_requirements": { "type": "string", "maxLength": 500 },
+        "applicant_remarks": { "type": "string", "maxLength": 500 },
+        "admin_remarks": { "type": "string", "maxLength": 500 },
+        "status": { "type": "string", "enum": ["PENDING", "APPROVED", "REJECTED", "CANCELLED", "CHECKED-IN", "CHECKED-OUT"] },
+        "reviewed_by": { "type": "string", "maxLength": 160 },
+        "reviewed_at": { "type": "string", "maxLength": 64 },
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "booking_id",
+        "booking_ref",
+        "applicant_name",
+        "organization",
+        "designation",
+        "email",
+        "mobile",
+        "purpose",
+        "check_in_date",
+        "check_out_date",
+        "num_persons",
+        "preferred_category",
+        "rooms_required",
+        "assigned_room_ids",
+        "assigned_room_numbers",
+        "special_requirements",
+        "applicant_remarks",
+        "admin_remarks",
+        "status",
+        "reviewed_by",
+        "reviewed_at",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "AdminUser": {
+      "title": "AdminUser",
+      "description": "Authorized Super Admin or Admin user profile",
+      "type": "object",
+      "properties": {
+        "admin_id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "minLength": 3, "maxLength": 160 },
+        "full_name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "role": { "type": "string", "enum": ["SUPER_ADMIN", "ADMIN"] },
+        "is_active": { "type": "boolean" },
+        "last_login_at": { "type": "string", "maxLength": 64 },
+        "created_by": { "type": "string", "maxLength": 160 },
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["admin_id", "email", "full_name", "role", "is_active", "last_login_at", "created_by", "created_at", "updated_at"]
+    },
+    "SiteSettingsDoc": {
+      "title": "SiteSettingsDoc",
+      "description": "Website CMS settings map document",
+      "type": "object",
+      "properties": {
+        "site_title": { "type": "string", "maxLength": 140 },
+        "site_subtitle": { "type": "string", "maxLength": 180 },
+        "logo_url": { "type": "string", "maxLength": 120000 },
+        "hero_heading": { "type": "string", "maxLength": 200 },
+        "hero_description": { "type": "string", "maxLength": 800 },
+        "campus_address": { "type": "string", "maxLength": 300 },
+        "contact_email": { "type": "string", "maxLength": 160 },
+        "contact_phone": { "type": "string", "maxLength": 60 },
+        "check_in_time": { "type": "string", "maxLength": 40 },
+        "check_out_time": { "type": "string", "maxLength": 40 },
+        "booking_guidelines": { "type": "string", "maxLength": 1000 },
+        "footer_text": { "type": "string", "maxLength": 200 },
+        "show_designation": { "type": "boolean" },
+        "show_purpose": { "type": "boolean" },
+        "show_special_requirements": { "type": "boolean" },
+        "show_applicant_remarks": { "type": "boolean" },
+        "updated_by": { "type": "string", "maxLength": 160 },
+        "updated_at": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "site_title",
+        "site_subtitle",
+        "logo_url",
+        "hero_heading",
+        "hero_description",
+        "campus_address",
+        "contact_email",
+        "contact_phone",
+        "check_in_time",
+        "check_out_time",
+        "booking_guidelines",
+        "footer_text",
+        "show_designation",
+        "show_purpose",
+        "show_special_requirements",
+        "show_applicant_remarks",
+        "updated_by",
+        "updated_at"
+      ]
+    },
+    "Announcement": {
+      "title": "Announcement",
+      "description": "Public campus announcement banner item",
+      "type": "object",
+      "properties": {
+        "announcement_id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 140 },
+        "content": { "type": "string", "minLength": 1, "maxLength": 800 },
+        "priority": { "type": "string", "enum": ["LOW", "NORMAL", "HIGH", "URGENT"] },
+        "is_active": { "type": "boolean" },
+        "starts_at": { "type": "string", "maxLength": 64 },
+        "ends_at": { "type": "string", "maxLength": 64 },
+        "created_by": { "type": "string", "maxLength": 160 },
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["announcement_id", "title", "content", "priority", "is_active", "starts_at", "ends_at", "created_by", "created_at", "updated_at"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable security and administrative action log",
+      "type": "object",
+      "properties": {
+        "log_id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "actor_id": { "type": "string", "maxLength": 128 },
+        "actor_email": { "type": "string", "maxLength": 160 },
+        "actor_role": { "type": "string", "maxLength": 32 },
+        "action": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "entity_type": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "entity_id": { "type": "string", "maxLength": 128 },
+        "details_summary": { "type": "string", "maxLength": 800 },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["log_id", "actor_id", "actor_email", "actor_role", "action", "entity_type", "entity_id", "details_summary", "created_at"]
+    }
+  },
+  "firestore": {
+    "/rooms/{roomId}": {
+      "schema": { "$ref": "#/entities/Room" },
+      "description": "All 84+ campus rooms and statuses"
+    },
+    "/floors/{floorId}": {
+      "schema": { "$ref": "#/entities/Floor" },
+      "description": "Floors 1 to 6 metadata"
+    },
+    "/room_categories/{categoryId}": {
+      "schema": { "$ref": "#/entities/RoomCategory" },
+      "description": "Room categories for booking and inventory"
+    },
+    "/room_allocations/{allocationId}": {
+      "schema": { "$ref": "#/entities/RoomAllocation" },
+      "description": "CR Building and general allocation records"
+    },
+    "/bookings/{bookingId}": {
+      "schema": { "$ref": "#/entities/Booking" },
+      "description": "Public booking requests and admin approvals"
+    },
+    "/admins/{adminId}": {
+      "schema": { "$ref": "#/entities/AdminUser" },
+      "description": "Super Admin and Admin role documents keyed by Firebase Auth UID"
+    },
+    "/settings/{settingId}": {
+      "schema": { "$ref": "#/entities/SiteSettingsDoc" },
+      "description": "Public CMS settings document (settings/public)"
+    },
+    "/announcements/{announcementId}": {
+      "schema": { "$ref": "#/entities/Announcement" },
+      "description": "Campus announcements"
+    },
+    "/audit_logs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Immutable administrative audit logs"
+    }
+  }
+}

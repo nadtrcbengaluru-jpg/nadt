@@ -1,0 +1,6 @@
+{
+  "name": "NADT Regional Campus, Bengaluru – Room Inventory & Booking System",
+  "description": "Room Inventory, Room Booking, CR Building Allocation, and Administration Management System for NADT Regional Campus, Bengaluru.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
