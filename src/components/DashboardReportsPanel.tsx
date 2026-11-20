@@ -1,7 +1,12 @@
 import {useMemo, useState} from 'react';
 import {Download, FileSpreadsheet, FileText, RefreshCw} from 'lucide-react';
 import type {Booking, Floor, Room, RoomCategory} from '../types/database.ts';
-import {exportRowsToExcel, exportTableToPdf} from '../lib/exportUtils.ts';
+import {
+  exportBookingsToCsv,
+  exportRowsToCsv,
+  exportRowsToExcel,
+  exportTableToPdf,
+} from '../lib/exportUtils.ts';
 
 interface DashboardReportsPanelProps {
   rooms: Room[];
@@ -177,11 +182,25 @@ export function DashboardReportsPanel({
       });
   }, [rooms, bookings]);
 
-  const handleExportActiveReport = (format: 'EXCEL' | 'PDF') => {
+  const handleExportActiveReport = (format: 'CSV' | 'EXCEL' | 'PDF') => {
     const dateStamp = new Date().toISOString().slice(0, 10);
 
     if (reportTab === 'FLOOR') {
-      if (format === 'EXCEL') {
+      if (format === 'CSV') {
+        exportRowsToCsv(
+          `NADT_Floor_Report_${dateStamp}`,
+          ['Floor', 'Total Rooms', 'Available', 'Booked', 'Occupied', 'Maintenance', 'CR Building'],
+          floorReport.map((r) => [
+            r.floor,
+            r.total,
+            r.available,
+            r.booked,
+            r.occupied,
+            r.maintenance,
+            r.crBuilding,
+          ]),
+        );
+      } else if (format === 'EXCEL') {
         exportRowsToExcel(
           `NADT_Floor_Report_${dateStamp}`,
           'Floor Report',
@@ -216,7 +235,21 @@ export function DashboardReportsPanel({
     }
 
     if (reportTab === 'CATEGORY') {
-      if (format === 'EXCEL') {
+      if (format === 'CSV') {
+        exportRowsToCsv(
+          `NADT_Category_Report_${dateStamp}`,
+          ['Category', 'AC / Non-AC', 'Total Rooms', 'Available', 'Booked/Occupied', 'Maintenance', 'CR Building'],
+          categoryReport.map((r) => [
+            r.category,
+            r.acType,
+            r.total,
+            r.available,
+            r.bookedOrOccupied,
+            r.maintenance,
+            r.crBuilding,
+          ]),
+        );
+      } else if (format === 'EXCEL') {
         exportRowsToExcel(
           `NADT_Category_Report_${dateStamp}`,
           'Category Report',
@@ -251,7 +284,12 @@ export function DashboardReportsPanel({
     }
 
     if (reportTab === 'BOOKINGS_DATE') {
-      if (format === 'EXCEL') {
+      if (format === 'CSV') {
+        exportBookingsToCsv(
+          dateWiseBookings,
+          fromDate || toDate ? 'NADT_Bookings_DateRange' : 'NADT_Bookings_Report',
+        );
+      } else if (format === 'EXCEL') {
         exportRowsToExcel(
           `NADT_Bookings_Report_${dateStamp}`,
           'Bookings Report',
@@ -288,7 +326,21 @@ export function DashboardReportsPanel({
     }
 
     if (reportTab === 'CR_BUILDING') {
-      if (format === 'EXCEL') {
+      if (format === 'CSV') {
+        exportRowsToCsv(
+          `NADT_CR_Building_Report_${dateStamp}`,
+          ['Room Number', 'Floor', 'Category', 'AC / Non-AC', 'Status', 'Verification', 'Remarks'],
+          crBuildingRooms.map((r) => [
+            r.room_number,
+            r.floor_name,
+            r.category_name,
+            r.ac_type,
+            r.status,
+            r.verification_status,
+            r.remarks,
+          ]),
+        );
+      } else if (format === 'EXCEL') {
         exportRowsToExcel(
           `NADT_CR_Building_Report_${dateStamp}`,
           'CR Building',
@@ -322,7 +374,22 @@ export function DashboardReportsPanel({
     }
 
     // OCCUPANCY
-    if (format === 'EXCEL') {
+    if (format === 'CSV') {
+      exportRowsToCsv(
+        `NADT_Occupancy_Report_${dateStamp}`,
+        ['Room', 'Floor', 'Category', 'Status', 'Allocation', 'Occupant', 'Booking Ref', 'Stay Dates'],
+        occupancyRows.map((r) => [
+          r.room_number,
+          r.floor_name,
+          r.category_name,
+          r.status,
+          r.allocation,
+          r.occupant,
+          r.booking_ref,
+          r.stay,
+        ]),
+      );
+    } else if (format === 'EXCEL') {
       exportRowsToExcel(
         `NADT_Occupancy_Report_${dateStamp}`,
         'Room Occupancy',
@@ -458,7 +525,15 @@ export function DashboardReportsPanel({
             ))}
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => handleExportActiveReport('CSV')}
+              className="px-3.5 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 inline-flex items-center gap-1.5 cursor-pointer"
+            >
+              <Download className="w-3.5 h-3.5 text-[#0F2942]" />
+              Export CSV
+            </button>
             <button
               type="button"
               onClick={() => handleExportActiveReport('EXCEL')}

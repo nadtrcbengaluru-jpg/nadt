@@ -1,6 +1,6 @@
 import {useState, type FormEvent} from 'react';
-import {AlertCircle, CheckCircle2, KeyRound} from 'lucide-react';
-import {auth} from '../firebase.ts';
+import {AlertCircle, CheckCircle2, ExternalLink, KeyRound} from 'lucide-react';
+import {auth, FIREBASE_PROJECT_ID} from '../firebase.ts';
 import type {AdminUser} from '../types/database.ts';
 import {changeOrLinkOwnPassword} from '../lib/firestoreDb.ts';
 import {extractReadableError} from '../lib/firestoreError.ts';
@@ -10,8 +10,11 @@ interface AccountSecurityPanelProps {
 }
 
 export function AccountSecurityPanel({admin}: AccountSecurityPanelProps) {
-  const hasPasswordLinked = Boolean(
-    auth.currentUser?.providerData.some((p) => p.providerId === 'password'),
+  const [hasPasswordLinked, setHasPasswordLinked] = useState<boolean>(() =>
+    Boolean(auth.currentUser?.providerData.some((p) => p.providerId === 'password')),
+  );
+  const hasGoogleLinked = Boolean(
+    auth.currentUser?.providerData.some((p) => p.providerId === 'google.com'),
   );
 
   const [currentPassword, setCurrentPassword] = useState('');
@@ -19,12 +22,16 @@ export function AccountSecurityPanel({admin}: AccountSecurityPanelProps) {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [needsProviderEnable, setNeedsProviderEnable] = useState(false);
   const [success, setSuccess] = useState<string | null>(null);
+
+  const firebaseProvidersUrl = `https://console.firebase.google.com/project/${FIREBASE_PROJECT_ID}/authentication/providers`;
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
     setSuccess(null);
+    setNeedsProviderEnable(false);
 
     if (newPassword.length < 8) {
       setError('Password must be at least 8 characters long.');
@@ -44,16 +51,20 @@ export function AccountSecurityPanel({admin}: AccountSecurityPanelProps) {
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
+      if (outcome === 'LINKED') {
+        setHasPasswordLinked(true);
+      }
       setSuccess(
         outcome === 'LINKED'
-          ? 'Password linked to your Firebase account. You can now sign in with both User ID/Password and Google.'
+          ? `Password credential created and linked to ${admin.email}. You can now sign in with User ID/Password or Google.`
           : 'Your password has been updated securely in Firebase Authentication.',
       );
     } catch (err) {
       const msg = extractReadableError(err);
-      if (msg.includes('operation-not-allowed')) {
+      if (msg.includes('operation-not-allowed') || msg.includes('PASSWORD_LOGIN_DISABLED')) {
+        setNeedsProviderEnable(true);
         setError(
-          'Enable the Email/Password provider in Firebase Console Authentication → Sign-in method before linking a password.',
+          'Email/Password sign-in is not yet enabled in Firebase Authentication for this project. Enable it in Firebase Console first, then click Set & Link Password again.',
         );
       } else if (msg.includes('requires-recent-login')) {
         setError(
@@ -87,17 +98,53 @@ export function AccountSecurityPanel({admin}: AccountSecurityPanelProps) {
           </h3>
         </div>
 
+        <div className="mt-4 text-xs text-slate-600 flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span>
+            User ID: <strong className="font-mono text-slate-900">{admin.email}</strong>
+          </span>
+          <span>·</span>
+          <span>
+            Google Sign-In:{' '}
+            <strong className={hasGoogleLinked ? 'text-emerald-700' : 'text-slate-500'}>
+              {hasGoogleLinked ? 'Active' : 'Not Linked'}
+            </strong>
+          </span>
+          <span>·</span>
+          <span>
+            Password Login:{' '}
+            <strong className={hasPasswordLinked ? 'text-emerald-700' : 'text-amber-700'}>
+              {hasPasswordLinked ? 'Active' : 'Not Set Yet'}
+            </strong>
+          </span>
+        </div>
+
         {!hasPasswordLinked && (
           <p className="mt-4 text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-lg p-3">
-            Your account is currently signed in with Google. Setting a password here links Email/Password credentials directly to{' '}
-            <span className="font-mono">{admin.email}</span> so you can also sign in using User ID and Password.
+            Your account is currently signed in with Google. Enter a password below (minimum 8
+            characters) to create User ID &amp; Password credentials for{' '}
+            <span className="font-mono">{admin.email}</span>.
           </p>
         )}
 
         {error && (
-          <div className="mt-4 p-3.5 rounded-lg bg-red-50 border border-red-200 text-sm text-red-800 flex items-start gap-2.5">
-            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-600" />
-            <span>{error}</span>
+          <div className="mt-4 p-3.5 rounded-lg bg-red-50 border border-red-200 text-sm text-red-800 space-y-2">
+            <div className="flex items-start gap-2.5">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-600" />
+              <span>{error}</span>
+            </div>
+            {needsProviderEnable && (
+              <div className="pl-6">
+                <a
+                  href={firebaseProvidersUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#0F2942] underline"
+                >
+                  Open Firebase Authentication Sign-In Providers ({FIREBASE_PROJECT_ID})
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+              </div>
+            )}
           </div>
         )}
 

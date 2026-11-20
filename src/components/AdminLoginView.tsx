@@ -1,5 +1,6 @@
 import {useState, type FormEvent} from 'react';
 import {
+  sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signInWithPopup,
   signOut,
@@ -7,6 +8,7 @@ import {
 import {
   AlertCircle,
   ArrowLeft,
+  CheckCircle2,
   ExternalLink,
   Eye,
   EyeOff,
@@ -39,7 +41,9 @@ export function AdminLoginView({
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [googleSubmitting, setGoogleSubmitting] = useState(false);
+  const [resetSending, setResetSending] = useState(false);
   const [error, setError] = useState<string | null>(initialNotice || null);
+  const [infoNotice, setInfoNotice] = useState<string | null>(null);
   const [showPasswordProviderHelp, setShowPasswordProviderHelp] =
     useState(false);
 
@@ -99,6 +103,7 @@ export function AdminLoginView({
 
   const handleGoogleSignIn = async () => {
     setError(null);
+    setInfoNotice(null);
     setShowPasswordProviderHelp(false);
     setGoogleSubmitting(true);
     try {
@@ -110,6 +115,27 @@ export function AdminLoginView({
       await signOut(auth).catch(() => {});
     } finally {
       setGoogleSubmitting(false);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    setError(null);
+    setInfoNotice(null);
+    const targetEmail = userId.trim();
+    if (!targetEmail) {
+      setError('Enter your Administrator User ID (Email) above first, then click Reset Password.');
+      return;
+    }
+    setResetSending(true);
+    try {
+      await sendPasswordResetEmail(auth, targetEmail);
+      setInfoNotice(
+        `Password reset instructions have been sent to ${targetEmail} (if an Email/Password credential exists for that address).`,
+      );
+    } catch (err: unknown) {
+      setError(extractReadableError(err));
+    } finally {
+      setResetSending(false);
     }
   };
 
@@ -148,6 +174,16 @@ export function AdminLoginView({
           >
             <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-600" />
             <span>{error}</span>
+          </div>
+        )}
+
+        {infoNotice && (
+          <div
+            role="status"
+            className="mt-5 p-3.5 rounded-lg bg-emerald-50 border border-emerald-200 text-sm text-emerald-800 flex items-start gap-2.5"
+          >
+            <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-emerald-600" />
+            <span>{infoNotice}</span>
           </div>
         )}
 
@@ -235,12 +271,22 @@ export function AdminLoginView({
           </div>
 
           <div>
-            <label
-              htmlFor="admin-password"
-              className="block text-sm font-medium text-slate-700 mb-1.5"
-            >
-              Password
-            </label>
+            <div className="flex items-center justify-between mb-1.5">
+              <label
+                htmlFor="admin-password"
+                className="block text-sm font-medium text-slate-700"
+              >
+                Password
+              </label>
+              <button
+                type="button"
+                disabled={resetSending}
+                onClick={() => void handleForgotPassword()}
+                className="text-xs font-medium text-[#0F2942] hover:underline cursor-pointer disabled:opacity-50"
+              >
+                {resetSending ? 'Sending...' : 'Reset Password'}
+              </button>
+            </div>
             <div className="relative">
               <input
                 id="admin-password"
@@ -277,10 +323,18 @@ export function AdminLoginView({
           </button>
         </form>
 
-        <p className="mt-6 text-xs text-slate-500 leading-relaxed border-t border-slate-200 pt-4">
-          Public room booking applicants do not require an account. Administrative sessions are
-          protected by Firebase Authentication and Firestore Security Rules.
-        </p>
+        <div className="mt-6 text-xs text-slate-600 leading-relaxed border-t border-slate-200 pt-4 space-y-2">
+          <div className="font-semibold text-slate-800">
+            First-Time Super Admin Credential Setup
+          </div>
+          <p>
+            Click <strong>Sign In with Google (Super Admin)</strong> using{' '}
+            <span className="font-mono text-slate-900">{SUPER_ADMIN_EMAIL}</span> to
+            initialize your Super Admin console immediately. To also enable password
+            login, turn on <strong>Email/Password</strong> in Firebase Console and set
+            your password under <strong>Account Security</strong>.
+          </p>
+        </div>
       </div>
 
       <div className="max-w-md w-full mx-auto text-center text-xs text-slate-400">

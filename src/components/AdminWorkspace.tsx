@@ -3,6 +3,8 @@ import {
   AlertCircle,
   BedDouble,
   CalendarClock,
+  Check,
+  Download,
   FileBarChart,
   Globe,
   KeyRound,
@@ -14,7 +16,12 @@ import {
   X,
 } from 'lucide-react';
 import type {AdminUser} from '../types/database.ts';
-import {fetchAdminSnapshot, type AdminSnapshotData} from '../lib/firestoreDb.ts';
+import {exportBookingsToCsv} from '../lib/exportUtils.ts';
+import {
+  fetchAdminSnapshot,
+  recordAdminExportAuditLog,
+  type AdminSnapshotData,
+} from '../lib/firestoreDb.ts';
 import {extractReadableError} from '../lib/firestoreError.ts';
 import {AccountSecurityPanel} from './AccountSecurityPanel.tsx';
 import {AdminAccountsPanel} from './AdminAccountsPanel.tsx';
@@ -50,6 +57,7 @@ export function AdminWorkspace({
   const [activeTab, setActiveTab] = useState<WorkspaceSection>('overview');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [csvExported, setCsvExported] = useState(false);
 
   const [snapshot, setSnapshot] = useState<AdminSnapshotData | null>(null);
   const [loadingSnapshot, setLoadingSnapshot] = useState(true);
@@ -107,6 +115,17 @@ export function AdminWorkspace({
     } finally {
       setLoggingOut(false);
     }
+  };
+
+  const handleQuickExportBookingsCsv = () => {
+    if (!snapshot || snapshot.bookings.length === 0) return;
+    const fileName = exportBookingsToCsv(snapshot.bookings);
+    setCsvExported(true);
+    window.setTimeout(() => setCsvExported(false), 2500);
+    void recordAdminExportAuditLog(
+      admin,
+      `Exported all ${snapshot.bookings.length} room booking record(s) to ${fileName}.`,
+    );
   };
 
   return (
@@ -260,8 +279,34 @@ export function AdminWorkspace({
             </div>
           </div>
 
-          <div className="flex items-center gap-3 shrink-0">
-            <span className="hidden sm:inline text-xs text-slate-600 font-mono">
+          <div className="flex items-center gap-2.5 shrink-0">
+            {snapshot && (
+              <button
+                type="button"
+                disabled={snapshot.bookings.length === 0}
+                onClick={handleQuickExportBookingsCsv}
+                title={
+                  snapshot.bookings.length === 0
+                    ? 'No booking records available to export'
+                    : `Export all ${snapshot.bookings.length} booking record(s) to CSV`
+                }
+                className="px-3 py-1.5 text-xs font-semibold text-[#0F2942] bg-slate-50 border border-slate-300 rounded-lg hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+              >
+                {csvExported ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-600" />
+                    CSV Exported
+                  </>
+                ) : (
+                  <>
+                    <Download className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Export Bookings CSV</span>
+                    <span className="sm:hidden">CSV</span>
+                  </>
+                )}
+              </button>
+            )}
+            <span className="hidden md:inline text-xs text-slate-600 font-mono">
               {admin.email}
             </span>
             <button

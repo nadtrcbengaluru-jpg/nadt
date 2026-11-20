@@ -2029,3 +2029,19 @@ export async function deleteMaintenanceScheduleInFirestore(
   });
 }
 
+export async function recordAdminExportAuditLog(
+  actor: AdminUser,
+  detailsSummary: string,
+): Promise<void> {
+  await writeAuditLog({
+    actorId: actor.admin_id,
+    actorEmail: actor.email,
+    actorRole: actor.role,
+    action: 'BOOKINGS_EXPORTED_CSV',
+    entityType: 'BOOKING',
+    entityId: 'CSV_EXPORT',
+    detailsSummary,
+  });
+}
+
+

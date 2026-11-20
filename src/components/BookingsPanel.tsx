@@ -3,6 +3,7 @@ import {
   AlertCircle,
   Calendar,
   CheckCircle2,
+  Download,
   RefreshCw,
   Search,
   X,
@@ -13,8 +14,10 @@ import type {
   BookingStatus,
   RoomCategory,
 } from '../types/database.ts';
+import {exportBookingsToCsv} from '../lib/exportUtils.ts';
 import {
   checkRoomAvailabilityInFirestore,
+  recordAdminExportAuditLog,
   updateBookingInFirestore,
   type RoomAvailabilityItem,
 } from '../lib/firestoreDb.ts';
@@ -92,6 +95,31 @@ export function BookingsPanel({
         return true;
       });
   }, [bookings, search, statusFilter, categoryFilter, dateFilter]);
+
+  const hasActiveFilters =
+    search.trim().length > 0 ||
+    statusFilter !== 'ALL' ||
+    categoryFilter !== 'ALL' ||
+    dateFilter.length > 0;
+
+  const handleExportCsv = () => {
+    setError(null);
+    if (filteredBookings.length === 0) {
+      setError('No booking records match the current filters to export.');
+      return;
+    }
+    const prefix = hasActiveFilters
+      ? 'NADT_Room_Bookings_Filtered'
+      : 'NADT_Room_Bookings';
+    const fileName = exportBookingsToCsv(filteredBookings, prefix);
+    setNotice(
+      `Exported ${filteredBookings.length} booking record${filteredBookings.length === 1 ? '' : 's'} to ${fileName}.`,
+    );
+    void recordAdminExportAuditLog(
+      admin,
+      `Exported ${filteredBookings.length} ${hasActiveFilters ? 'filtered ' : ''}booking record(s) to ${fileName}.`,
+    );
+  };
 
   const handleManualRefresh = async () => {
     setRefreshing(true);
@@ -203,15 +231,28 @@ export function BookingsPanel({
             check-in/check-out status.
           </p>
         </div>
-        <button
-          type="button"
-          disabled={refreshing}
-          onClick={() => void handleManualRefresh()}
-          className="px-3.5 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 inline-flex items-center gap-1.5 cursor-pointer self-start sm:self-auto"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
-          Refresh Bookings
-        </button>
+        <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+          <button
+            type="button"
+            disabled={filteredBookings.length === 0}
+            onClick={handleExportCsv}
+            className="px-3.5 py-2 text-xs font-semibold text-white bg-[#0F2942] hover:bg-[#173a5c] disabled:opacity-50 disabled:cursor-not-allowed rounded-lg inline-flex items-center gap-1.5 cursor-pointer"
+          >
+            <Download className="w-3.5 h-3.5" />
+            {hasActiveFilters
+              ? `Export Filtered CSV (${filteredBookings.length})`
+              : `Export CSV (${bookings.length})`}
+          </button>
+          <button
+            type="button"
+            disabled={refreshing}
+            onClick={() => void handleManualRefresh()}
+            className="px-3.5 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 inline-flex items-center gap-1.5 cursor-pointer"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+            Refresh Bookings
+          </button>
+        </div>
       </div>
 
       {error && (
