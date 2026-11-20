@@ -1,11 +1,18 @@
 import {useEffect, useState} from 'react';
-import {Building2, CalendarCheck, Megaphone, ShieldCheck} from 'lucide-react';
+import {
+  Building2,
+  CalendarCheck,
+  Megaphone,
+  Search,
+  ShieldCheck,
+} from 'lucide-react';
 import {
   fetchPublicBootstrap,
   type PublicBootstrapData,
 } from '../lib/firestoreDb.ts';
 import {DEFAULT_SITE_SETTINGS, INITIAL_CATEGORIES} from '../lib/seedFirestore.ts';
 import {PublicBookingForm} from './PublicBookingForm.tsx';
+import {PublicBookingStatusTracker} from './PublicBookingStatusTracker.tsx';
 
 interface PublicPortalShellProps {
   onOpenAdminLogin: () => void;
@@ -13,6 +20,14 @@ interface PublicPortalShellProps {
 
 export function PublicPortalShell({onOpenAdminLogin}: PublicPortalShellProps) {
   const [bootstrap, setBootstrap] = useState<PublicBootstrapData | null>(null);
+  const [facilityTab, setFacilityTab] = useState<'request' | 'status'>(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('ref') ? 'status' : 'request';
+  });
+  const [trackedRef, setTrackedRef] = useState<string>(() => {
+    const params = new URLSearchParams(window.location.search);
+    return (params.get('ref') || '').trim().toUpperCase();
+  });
 
   useEffect(() => {
     let active = true;
@@ -40,6 +55,17 @@ export function PublicPortalShell({onOpenAdminLogin}: PublicPortalShellProps) {
   const announcements = bootstrap?.announcements || [];
 
   const scrollToBooking = () => {
+    setFacilityTab('request');
+    document
+      .getElementById('booking-facility')
+      ?.scrollIntoView({behavior: 'smooth'});
+  };
+
+  const scrollToStatusTracker = (prefillRef?: string) => {
+    if (prefillRef) {
+      setTrackedRef(prefillRef);
+    }
+    setFacilityTab('status');
     document
       .getElementById('booking-facility')
       ?.scrollIntoView({behavior: 'smooth'});
@@ -65,6 +91,13 @@ export function PublicPortalShell({onOpenAdminLogin}: PublicPortalShellProps) {
           </a>
 
           <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-600">
+            <button
+              type="button"
+              onClick={() => scrollToStatusTracker()}
+              className="hover:text-slate-900 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              Track Status
+            </button>
             <a
               href="#categories"
               className="hover:text-slate-900 transition-colors whitespace-nowrap shrink-0"
@@ -92,7 +125,14 @@ export function PublicPortalShell({onOpenAdminLogin}: PublicPortalShellProps) {
             </button>
           </nav>
 
-          <div className="flex items-center shrink-0">
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => scrollToStatusTracker()}
+              className="md:hidden px-3 py-2 text-xs font-medium text-slate-700 bg-slate-100 border border-slate-200 rounded-lg hover:bg-slate-200 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              Track Status
+            </button>
             <button
               type="button"
               onClick={scrollToBooking}
@@ -139,7 +179,7 @@ export function PublicPortalShell({onOpenAdminLogin}: PublicPortalShellProps) {
                 {settings.hero_description}
               </p>
 
-              <div className="flex flex-wrap items-center gap-4 pt-2">
+              <div className="flex flex-wrap items-center gap-3 pt-2">
                 <button
                   type="button"
                   onClick={scrollToBooking}
@@ -149,8 +189,16 @@ export function PublicPortalShell({onOpenAdminLogin}: PublicPortalShellProps) {
                 </button>
                 <button
                   type="button"
+                  onClick={() => scrollToStatusTracker()}
+                  className="px-5 py-2.5 text-sm font-semibold text-[#0F2942] bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors inline-flex items-center gap-2 cursor-pointer"
+                >
+                  <Search className="w-4 h-4" />
+                  Check Booking Status
+                </button>
+                <button
+                  type="button"
                   onClick={onOpenAdminLogin}
-                  className="px-5 py-2.5 text-sm font-semibold text-slate-700 bg-slate-100 border border-slate-200 rounded-lg hover:bg-slate-200 transition-colors cursor-pointer"
+                  className="px-5 py-2.5 text-sm font-medium text-slate-700 bg-slate-100 border border-slate-200 rounded-lg hover:bg-slate-200 transition-colors cursor-pointer"
                 >
                   Administration Sign In
                 </button>
@@ -200,15 +248,52 @@ export function PublicPortalShell({onOpenAdminLogin}: PublicPortalShellProps) {
 
         <section
           id="booking-facility"
-          className="max-w-7xl mx-auto px-6 py-12"
+          className="max-w-7xl mx-auto px-6 py-12 space-y-5"
         >
-          <PublicBookingForm
-            categories={categories}
-            showDesignation={settings.show_designation}
-            showPurpose={settings.show_purpose}
-            showSpecialRequirements={settings.show_special_requirements}
-            showApplicantRemarks={settings.show_applicant_remarks}
-          />
+          <div className="inline-flex rounded-xl border border-slate-200 bg-white p-1">
+            <button
+              type="button"
+              onClick={() => setFacilityTab('request')}
+              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-colors cursor-pointer ${
+                facilityTab === 'request'
+                  ? 'bg-[#0F2942] text-white'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              New Booking Request
+            </button>
+            <button
+              type="button"
+              onClick={() => setFacilityTab('status')}
+              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-colors inline-flex items-center gap-2 cursor-pointer ${
+                facilityTab === 'status'
+                  ? 'bg-[#0F2942] text-white'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Search className="w-4 h-4" />
+              Check Booking Status
+            </button>
+          </div>
+
+          {facilityTab === 'request' ? (
+            <PublicBookingForm
+              categories={categories}
+              showDesignation={settings.show_designation}
+              showPurpose={settings.show_purpose}
+              showSpecialRequirements={settings.show_special_requirements}
+              showApplicantRemarks={settings.show_applicant_remarks}
+              onTrackStatus={(ref) => scrollToStatusTracker(ref)}
+            />
+          ) : (
+            <PublicBookingStatusTracker
+              initialRef={trackedRef}
+              checkInTime={settings.check_in_time}
+              checkOutTime={settings.check_out_time}
+              contactEmail={settings.contact_email}
+              contactPhone={settings.contact_phone}
+            />
+          )}
         </section>
 
         <section id="categories" className="max-w-7xl mx-auto px-6 pb-12">

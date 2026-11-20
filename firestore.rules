@@ -27,6 +27,10 @@ service cloud.firestore {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    function isValidBookingRef(ref) {
+      return ref is string && ref.size() >= 8 && ref.size() <= 48 && ref.matches('^NADT-BLR-[0-9]{8}-[A-Z0-9]{4,8}$');
+    }
+
     function isSuperAdmin() {
       return isSignedIn() && (
         (
@@ -143,8 +147,7 @@ service cloud.firestore {
           'admin_remarks', 'status', 'reviewed_by', 'reviewed_at', 'created_at', 'updated_at'
         ]) &&
         isValidId(data.booking_id) &&
-        data.booking_ref is string && data.booking_ref.size() >= 8 && data.booking_ref.size() <= 48 &&
-        data.booking_ref.matches('^NADT-BLR-[0-9]{8}-[A-Z0-9]{4,8}$') &&
+        isValidBookingRef(data.booking_ref) &&
         data.applicant_name is string && data.applicant_name.size() >= 1 && data.applicant_name.size() <= 120 &&
         data.organization is string && data.organization.size() >= 1 && data.organization.size() <= 160 &&
         data.designation is string && data.designation.size() <= 120 &&
@@ -181,6 +184,33 @@ service cloud.firestore {
         data.reviewed_at.size() == 0 &&
         data.created_at == request.time &&
         data.updated_at == request.time;
+    }
+
+    function isValidBookingStatusCard(data) {
+      return data.keys().hasAll([
+          'booking_ref', 'booking_id', 'status', 'check_in_date', 'check_out_date',
+          'preferred_category', 'rooms_required', 'assigned_room_numbers',
+          'admin_remarks', 'reviewed_at', 'created_at', 'updated_at'
+        ]) &&
+        data.keys().hasOnly([
+          'booking_ref', 'booking_id', 'status', 'check_in_date', 'check_out_date',
+          'preferred_category', 'rooms_required', 'assigned_room_numbers',
+          'admin_remarks', 'reviewed_at', 'created_at', 'updated_at'
+        ]) &&
+        isValidBookingRef(data.booking_ref) &&
+        isValidId(data.booking_id) &&
+        data.status in ['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED', 'CHECKED-IN', 'CHECKED-OUT'] &&
+        data.check_in_date is string && data.check_in_date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+        data.check_out_date is string && data.check_out_date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+        data.check_in_date < data.check_out_date &&
+        data.preferred_category is string && data.preferred_category.size() >= 1 && data.preferred_category.size() <= 100 &&
+        data.rooms_required is int && data.rooms_required >= 1 && data.rooms_required <= 50 &&
+        data.assigned_room_numbers is list && data.assigned_room_numbers.size() <= 30 &&
+        (data.assigned_room_numbers.size() == 0 || data.assigned_room_numbers[0] is string) &&
+        data.admin_remarks is string && data.admin_remarks.size() <= 500 &&
+        data.reviewed_at is string && data.reviewed_at.size() <= 64 &&
+        data.created_at is timestamp &&
+        data.updated_at is timestamp;
     }
 
     function isValidAdminUser(data) {
@@ -259,6 +289,35 @@ service cloud.firestore {
         data.entity_id is string && data.entity_id.size() <= 128 &&
         data.details_summary is string && data.details_summary.size() <= 800 &&
         data.created_at is timestamp;
+    }
+
+    function isValidMaintenanceSchedule(data) {
+      return data.keys().hasAll([
+          'schedule_id', 'room_id', 'room_number', 'floor_name', 'title',
+          'maintenance_type', 'priority', 'scheduled_date', 'end_date',
+          'status', 'assigned_to', 'notes', 'created_by', 'created_at', 'updated_at'
+        ]) &&
+        data.keys().hasOnly([
+          'schedule_id', 'room_id', 'room_number', 'floor_name', 'title',
+          'maintenance_type', 'priority', 'scheduled_date', 'end_date',
+          'status', 'assigned_to', 'notes', 'created_by', 'created_at', 'updated_at'
+        ]) &&
+        isValidId(data.schedule_id) &&
+        isValidId(data.room_id) &&
+        data.room_number is string && data.room_number.size() >= 1 && data.room_number.size() <= 32 &&
+        data.floor_name is string && data.floor_name.size() >= 1 && data.floor_name.size() <= 80 &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 140 &&
+        data.maintenance_type in ['Electrical', 'Plumbing', 'HVAC / AC', 'Housekeeping', 'Furniture & Civil', 'Inspection'] &&
+        data.priority in ['LOW', 'NORMAL', 'HIGH', 'URGENT'] &&
+        data.scheduled_date is string && data.scheduled_date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+        data.end_date is string && data.end_date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+        data.scheduled_date <= data.end_date &&
+        data.status in ['SCHEDULED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'] &&
+        data.assigned_to is string && data.assigned_to.size() <= 120 &&
+        data.notes is string && data.notes.size() <= 500 &&
+        data.created_by is string && data.created_by.size() <= 160 &&
+        data.created_at is timestamp &&
+        data.updated_at is timestamp;
     }
 
     // ------------------------------------------------------------------------
@@ -382,6 +441,44 @@ service cloud.firestore {
       allow delete: if isValidId(bookingId) && isSuperAdmin();
     }
 
+    match /booking_status_cards/{bookingRef} {
+      // Zero-PII single-document lookup by exact booking reference only; list is strictly admin-only
+      allow get: if isValidBookingRef(bookingRef);
+      allow list: if isAdmin();
+      allow create: if isValidBookingRef(bookingRef) &&
+        isValidBookingStatusCard(incoming()) &&
+        incoming().booking_ref == bookingRef &&
+        incoming().created_at == request.time &&
+        incoming().updated_at == request.time &&
+        (
+          (
+            incoming().status == 'PENDING' &&
+            incoming().assigned_room_numbers.size() == 0 &&
+            incoming().admin_remarks.size() == 0 &&
+            incoming().reviewed_at.size() == 0 &&
+            existsAfter(/databases/$(database)/documents/bookings/$(incoming().booking_id)) &&
+            getAfter(/databases/$(database)/documents/bookings/$(incoming().booking_id)).data.booking_ref == bookingRef
+          ) ||
+          (
+            isAdmin() &&
+            exists(/databases/$(database)/documents/bookings/$(incoming().booking_id))
+          )
+        );
+      allow update: if isValidBookingRef(bookingRef) &&
+        isValidBookingStatusCard(incoming()) &&
+        incoming().booking_ref == existing().booking_ref &&
+        incoming().booking_id == existing().booking_id &&
+        incoming().created_at == existing().created_at &&
+        incoming().updated_at == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'status', 'check_in_date', 'check_out_date', 'preferred_category',
+          'rooms_required', 'assigned_room_numbers', 'admin_remarks',
+          'reviewed_at', 'updated_at'
+        ]) &&
+        isAdmin();
+      allow delete: if isValidBookingRef(bookingRef) && isSuperAdmin();
+    }
+
     match /admins/{adminId} {
       allow get: if isValidId(adminId) && (isSuperAdmin() || (isSignedIn() && request.auth.uid == adminId));
       allow list: if isSuperAdmin();
@@ -466,6 +563,31 @@ service cloud.firestore {
         incoming().created_at == request.time &&
         isAdmin();
       allow update, delete: if false;
+    }
+
+    match /maintenance_schedules/{scheduleId} {
+      allow get: if isValidId(scheduleId) && isAdmin();
+      allow list: if isAdmin();
+      allow create: if isValidId(scheduleId) &&
+        isValidMaintenanceSchedule(incoming()) &&
+        incoming().schedule_id == scheduleId &&
+        incoming().created_at == request.time &&
+        incoming().updated_at == request.time &&
+        exists(/databases/$(database)/documents/rooms/$(incoming().room_id)) &&
+        isAdmin();
+      allow update: if isValidId(scheduleId) &&
+        isValidMaintenanceSchedule(incoming()) &&
+        incoming().schedule_id == existing().schedule_id &&
+        incoming().room_id == existing().room_id &&
+        incoming().created_by == existing().created_by &&
+        incoming().created_at == existing().created_at &&
+        incoming().updated_at == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'room_number', 'floor_name', 'title', 'maintenance_type', 'priority',
+          'scheduled_date', 'end_date', 'status', 'assigned_to', 'notes', 'updated_at'
+        ]) &&
+        isAdmin();
+      allow delete: if isValidId(scheduleId) && isSuperAdmin();
     }
   }
 }

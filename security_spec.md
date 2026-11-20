@@ -21,3 +21,8 @@
 10. **Standard Admin Deleting Room Permanently:** Standard `ADMIN` tries `delete` on `/rooms/RM-001`. -> **REJECTED**
 11. **Standard Admin Editing CMS Settings:** Standard `ADMIN` tries to overwrite `/settings/public`. -> **REJECTED**
 12. **Hidden Announcement Scraping:** Public visitor runs `list` on `/announcements` without filtering `is_active == true`. -> **REJECTED**
+13. **Orphaned / Public Maintenance Schedule Injection:** Unauthenticated user or admin referencing a non-existent `room_id` attempts to create `/maintenance_schedules/MNT-ATK1`, or sets `scheduled_date > end_date`. -> **REJECTED**
+14. **Public Status Card Enumeration (`list`):** Unauthenticated visitor runs `list` query on `/booking_status_cards` to scrape all campus booking references. -> **REJECTED**
+15. **Orphaned or Pre-Approved Status Card Forgery:** Public visitor attempts to `create` `/booking_status_cards/NADT-BLR-20261119-FAKE01` without atomically creating a matching `/bookings/{bookingId}`, or sets `status: 'APPROVED'` or attempts to `update` an existing status card. -> **REJECTED**
+
+

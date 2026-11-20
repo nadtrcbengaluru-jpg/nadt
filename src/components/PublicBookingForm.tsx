@@ -1,11 +1,19 @@
 import {useState, type FormEvent} from 'react';
-import {AlertCircle, CheckCircle2, Printer} from 'lucide-react';
+import {
+  AlertCircle,
+  Check,
+  CheckCircle2,
+  Copy,
+  Printer,
+  Search,
+} from 'lucide-react';
 import type {RoomCategory} from '../types/database.ts';
 import {
   submitPublicBooking,
   type PublicBookingReceipt,
 } from '../lib/firestoreDb.ts';
 import {extractReadableError} from '../lib/firestoreError.ts';
+import {rememberRecentBookingRef} from './PublicBookingStatusTracker.tsx';
 
 interface PublicBookingFormProps {
   categories: RoomCategory[];
@@ -13,6 +21,7 @@ interface PublicBookingFormProps {
   showPurpose?: boolean;
   showSpecialRequirements?: boolean;
   showApplicantRemarks?: boolean;
+  onTrackStatus?: (bookingRef: string) => void;
 }
 
 export function PublicBookingForm({
@@ -21,6 +30,7 @@ export function PublicBookingForm({
   showPurpose = true,
   showSpecialRequirements = true,
   showApplicantRemarks = true,
+  onTrackStatus,
 }: PublicBookingFormProps) {
   const today = new Date().toISOString().slice(0, 10);
   const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
@@ -44,6 +54,7 @@ export function PublicBookingForm({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<PublicBookingReceipt | null>(null);
+  const [copiedRef, setCopiedRef] = useState(false);
   const [submittedSummary, setSubmittedSummary] = useState<{
     name: string;
     checkIn: string;
@@ -86,6 +97,7 @@ export function PublicBookingForm({
         rooms: roomsRequired,
       });
       setReceipt(res);
+      rememberRecentBookingRef(res.booking_ref);
       setApplicantName('');
       setOrganization('');
       setDesignation('');
@@ -151,12 +163,47 @@ export function PublicBookingForm({
         <div className="flex flex-wrap items-center gap-3 pt-2">
           <button
             type="button"
+            onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(receipt.booking_ref);
+                setCopiedRef(true);
+                window.setTimeout(() => setCopiedRef(false), 2000);
+              } catch {
+                // Ignore clipboard denial
+              }
+            }}
+            className="px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 inline-flex items-center gap-1.5 cursor-pointer"
+          >
+            {copiedRef ? (
+              <>
+                <Check className="w-3.5 h-3.5 text-emerald-600" />
+                Reference Copied
+              </>
+            ) : (
+              <>
+                <Copy className="w-3.5 h-3.5" />
+                Copy Reference
+              </>
+            )}
+          </button>
+          <button
+            type="button"
             onClick={() => window.print()}
             className="px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 inline-flex items-center gap-1.5 cursor-pointer"
           >
             <Printer className="w-3.5 h-3.5" />
             Print Confirmation
           </button>
+          {onTrackStatus && (
+            <button
+              type="button"
+              onClick={() => onTrackStatus(receipt.booking_ref)}
+              className="px-4 py-2 text-xs font-semibold text-[#0F2942] bg-slate-100 border border-slate-300 hover:bg-slate-200 rounded-lg inline-flex items-center gap-1.5 cursor-pointer"
+            >
+              <Search className="w-3.5 h-3.5" />
+              Check Live Status
+            </button>
+          )}
           <button
             type="button"
             onClick={() => {

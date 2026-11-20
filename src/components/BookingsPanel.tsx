@@ -476,7 +476,10 @@ export function BookingsPanel({
 
             <div>
               <label className="block text-xs font-medium text-slate-700 mb-1">
-                Admin Remarks
+                Admin Remarks{' '}
+                <span className="font-normal text-slate-500">
+                  (visible to applicant when checking booking status)
+                </span>
               </label>
               <textarea
                 rows={2}

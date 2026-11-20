@@ -36,8 +36,13 @@ import type {
   BedType,
   Booking,
   BookingStatus,
+  BookingStatusCard,
   BuildingAllocation,
   Floor,
+  MaintenancePriority,
+  MaintenanceSchedule,
+  MaintenanceStatus,
+  MaintenanceType,
   Room,
   RoomAllocation,
   RoomCategory,
@@ -93,6 +98,7 @@ export interface AdminSnapshotData {
   settings: SiteSettingsDoc;
   announcements: Announcement[];
   auditLogs: AuditLog[];
+  maintenanceSchedules: MaintenanceSchedule[];
 }
 
 export type RoomAvailabilityItem = Room & {
@@ -217,6 +223,45 @@ function mapBooking(data: Record<string, unknown>, id: string): Booking {
     created_at: tsToIso(data.created_at),
     updated_at: tsToIso(data.updated_at),
   };
+}
+
+function mapBookingStatusCard(
+  data: Record<string, unknown>,
+  id: string,
+): BookingStatusCard {
+  return {
+    booking_ref: String(data.booking_ref || id),
+    booking_id: String(data.booking_id || ''),
+    status: (data.status as BookingStatus) || 'PENDING',
+    check_in_date: String(data.check_in_date || ''),
+    check_out_date: String(data.check_out_date || ''),
+    preferred_category: String(data.preferred_category || ''),
+    rooms_required: Number(data.rooms_required || 1),
+    assigned_room_numbers: Array.isArray(data.assigned_room_numbers)
+      ? data.assigned_room_numbers.map(String)
+      : [],
+    admin_remarks: String(data.admin_remarks || ''),
+    reviewed_at: String(data.reviewed_at || ''),
+    created_at: tsToIso(data.created_at),
+    updated_at: tsToIso(data.updated_at),
+  };
+}
+
+export const BOOKING_REF_REGEX = /^NADT-BLR-[0-9]{8}-[A-Z0-9]{4,8}$/;
+
+function generateSecureRefCode(length = 8): string {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    const bytes = new Uint8Array(length);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, (b) => alphabet[b % alphabet.length]).join('');
+  }
+  return Math.random()
+    .toString(36)
+    .replace(/[^a-z0-9]/gi, '')
+    .toUpperCase()
+    .padEnd(length, 'X')
+    .slice(0, length);
 }
 
 function mapAdmin(data: Record<string, unknown>, id: string): AdminUser {
@@ -404,12 +449,7 @@ export async function submitPublicBooking(
   payload: PublicBookingPayload,
 ): Promise<PublicBookingReceipt> {
   const todayCompact = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-  const randomCode = Math.random()
-    .toString(36)
-    .replace(/[^a-z0-9]/gi, '')
-    .toUpperCase()
-    .padEnd(6, 'X')
-    .slice(0, 6);
+  const randomCode = generateSecureRefCode(8);
 
   const bookingRef = `NADT-BLR-${todayCompact}-${randomCode}`;
   const bookingId = makeId('BKG');
@@ -443,8 +483,26 @@ export async function submitPublicBooking(
     updated_at: serverTimestamp(),
   };
 
+  const statusCardPayload = {
+    booking_ref: bookingRef,
+    booking_id: bookingId,
+    status: 'PENDING' as BookingStatus,
+    check_in_date: docPayload.check_in_date,
+    check_out_date: docPayload.check_out_date,
+    preferred_category: docPayload.preferred_category,
+    rooms_required: docPayload.rooms_required,
+    assigned_room_numbers: [] as string[],
+    admin_remarks: '',
+    reviewed_at: '',
+    created_at: serverTimestamp(),
+    updated_at: serverTimestamp(),
+  };
+
   try {
-    await setDoc(doc(db, 'bookings', bookingId), docPayload);
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'bookings', bookingId), docPayload);
+    batch.set(doc(db, 'booking_status_cards', bookingRef), statusCardPayload);
+    await batch.commit();
   } catch (err) {
     handleFirestoreError(err, OperationType.CREATE, `bookings/${bookingId}`);
   }
@@ -455,6 +513,34 @@ export async function submitPublicBooking(
     status: 'PENDING',
     created_at: new Date().toISOString(),
   };
+}
+
+export async function lookupBookingStatusByRef(
+  rawRef: string,
+): Promise<BookingStatusCard | null> {
+  const normalizedRef = rawRef.trim().toUpperCase();
+  if (!BOOKING_REF_REGEX.test(normalizedRef)) {
+    throw new Error(
+      'Invalid reference format. Expected format: NADT-BLR-YYYYMMDD-XXXXXX (e.g. NADT-BLR-20261119-A7K2M9).',
+    );
+  }
+
+  try {
+    const snap = await getDoc(doc(db, 'booking_status_cards', normalizedRef));
+    if (!snap.exists()) {
+      return null;
+    }
+    return mapBookingStatusCard(
+      snap.data() as Record<string, unknown>,
+      snap.id,
+    );
+  } catch (err) {
+    handleFirestoreError(
+      err,
+      OperationType.GET,
+      `booking_status_cards/${normalizedRef}`,
+    );
+  }
 }
 
 export async function ensureAdminProfile(user: User): Promise<AdminUser> {
@@ -564,6 +650,8 @@ export async function fetchAdminSnapshot(
       announcementsSnap,
       adminsSnap,
       logsSnap,
+      maintenanceSnap,
+      statusCardsSnap,
     ] = await Promise.all([
       getDocs(collection(db, 'rooms')),
       getDocs(collection(db, 'floors')),
@@ -589,7 +677,46 @@ export async function fetchAdminSnapshot(
             ),
           )
         : Promise.resolve(null),
+      getDocs(collection(db, 'maintenance_schedules')),
+      getDocs(collection(db, 'booking_status_cards')),
     ]);
+
+    const mappedBookings = bookingsSnap.docs
+      .map((d) => mapBooking(d.data() as Record<string, unknown>, d.id))
+      .sort((a, b) => b.created_at.localeCompare(a.created_at));
+
+    // Backfill any historical bookings that do not yet have a public zero-PII status card
+    const existingCardRefs = new Set(statusCardsSnap.docs.map((d) => d.id));
+    const missingCards = mappedBookings.filter(
+      (b) =>
+        BOOKING_REF_REGEX.test(b.booking_ref) &&
+        !existingCardRefs.has(b.booking_ref) &&
+        b.check_in_date < b.check_out_date,
+    );
+    if (missingCards.length > 0) {
+      try {
+        const backfillBatch = writeBatch(db);
+        for (const b of missingCards.slice(0, 200)) {
+          backfillBatch.set(doc(db, 'booking_status_cards', b.booking_ref), {
+            booking_ref: b.booking_ref,
+            booking_id: b.booking_id,
+            status: b.status,
+            check_in_date: b.check_in_date,
+            check_out_date: b.check_out_date,
+            preferred_category: b.preferred_category.slice(0, 100) || 'Single Non-AC',
+            rooms_required: Math.max(1, Math.min(50, Math.trunc(b.rooms_required || 1))),
+            assigned_room_numbers: b.assigned_room_numbers.slice(0, 30),
+            admin_remarks: b.admin_remarks.slice(0, 500),
+            reviewed_at: b.reviewed_at.slice(0, 64),
+            created_at: serverTimestamp(),
+            updated_at: serverTimestamp(),
+          });
+        }
+        await backfillBatch.commit();
+      } catch {
+        // Non-blocking best-effort backfill for historical bookings
+      }
+    }
 
     return {
       rooms: roomsSnap.docs
@@ -606,9 +733,7 @@ export async function fetchAdminSnapshot(
       allocations: allocationsSnap.docs.map((d) =>
         mapAllocation(d.data() as Record<string, unknown>, d.id),
       ),
-      bookings: bookingsSnap.docs
-        .map((d) => mapBooking(d.data() as Record<string, unknown>, d.id))
-        .sort((a, b) => b.created_at.localeCompare(a.created_at)),
+      bookings: mappedBookings,
       admins: adminsSnap
         ? adminsSnap.docs
             .map((d) => mapAdmin(d.data() as Record<string, unknown>, d.id))
@@ -627,6 +752,11 @@ export async function fetchAdminSnapshot(
             mapAuditLog(d.data() as Record<string, unknown>, d.id),
           )
         : [],
+      maintenanceSchedules: maintenanceSnap.docs
+        .map((d) =>
+          mapMaintenanceSchedule(d.data() as Record<string, unknown>, d.id),
+        )
+        .sort((a, b) => a.scheduled_date.localeCompare(b.scheduled_date)),
     };
   } catch (err) {
     handleFirestoreError(err, OperationType.LIST, 'admin_snapshot');
@@ -1217,6 +1347,40 @@ export async function updateBookingInFirestore(
       }
     }
 
+    // Keep public zero-PII booking_status_cards document synchronized
+    if (BOOKING_REF_REGEX.test(current.booking_ref)) {
+      const statusCardRef = doc(db, 'booking_status_cards', current.booking_ref);
+      const statusCardSnap = await getDoc(statusCardRef);
+      if (statusCardSnap.exists()) {
+        batch.update(statusCardRef, {
+          status: updateFields.status,
+          check_in_date: updateFields.check_in_date,
+          check_out_date: updateFields.check_out_date,
+          preferred_category: updateFields.preferred_category,
+          rooms_required: updateFields.rooms_required,
+          assigned_room_numbers: updateFields.assigned_room_numbers,
+          admin_remarks: updateFields.admin_remarks,
+          reviewed_at: updateFields.reviewed_at,
+          updated_at: serverTimestamp(),
+        });
+      } else {
+        batch.set(statusCardRef, {
+          booking_ref: current.booking_ref,
+          booking_id: current.booking_id,
+          status: updateFields.status,
+          check_in_date: updateFields.check_in_date,
+          check_out_date: updateFields.check_out_date,
+          preferred_category: updateFields.preferred_category,
+          rooms_required: updateFields.rooms_required,
+          assigned_room_numbers: updateFields.assigned_room_numbers,
+          admin_remarks: updateFields.admin_remarks,
+          reviewed_at: updateFields.reviewed_at,
+          created_at: serverTimestamp(),
+          updated_at: serverTimestamp(),
+        });
+      }
+    }
+
     await batch.commit();
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, `bookings/${bookingId}`);
@@ -1665,3 +1829,203 @@ export async function updateFloorInFirestore(
     detailsSummary: `Updated floor ${floorId} (${String(payload.floor_name || '')}).`,
   });
 }
+
+function mapMaintenanceSchedule(
+  data: Record<string, unknown>,
+  id: string,
+): MaintenanceSchedule {
+  return {
+    schedule_id: String(data.schedule_id || id),
+    room_id: String(data.room_id || ''),
+    room_number: String(data.room_number || ''),
+    floor_name: String(data.floor_name || ''),
+    title: String(data.title || ''),
+    maintenance_type: (data.maintenance_type as MaintenanceType) || 'Inspection',
+    priority: (data.priority as MaintenancePriority) || 'NORMAL',
+    scheduled_date: String(data.scheduled_date || ''),
+    end_date: String(data.end_date || ''),
+    status: (data.status as MaintenanceStatus) || 'SCHEDULED',
+    assigned_to: String(data.assigned_to || ''),
+    notes: String(data.notes || ''),
+    created_by: String(data.created_by || ''),
+    created_at: tsToIso(data.created_at),
+    updated_at: tsToIso(data.updated_at),
+  };
+}
+
+export async function createMaintenanceScheduleInFirestore(
+  input: {
+    room: Room;
+    title: string;
+    maintenance_type: MaintenanceType;
+    priority: MaintenancePriority;
+    scheduled_date: string;
+    end_date: string;
+    assigned_to: string;
+    notes: string;
+    markRoomUnderMaintenance?: boolean;
+  },
+  actor: AdminUser,
+): Promise<MaintenanceSchedule> {
+  if (!input.scheduled_date || !input.end_date || input.scheduled_date > input.end_date) {
+    throw new Error('End date must be on or after the scheduled start date.');
+  }
+  const cleanTitle = input.title.trim();
+  if (!cleanTitle) {
+    throw new Error('Maintenance title is required.');
+  }
+
+  const scheduleId = makeId('MNT');
+  const status: MaintenanceStatus = input.markRoomUnderMaintenance
+    ? 'IN_PROGRESS'
+    : 'SCHEDULED';
+
+  const docData = {
+    schedule_id: scheduleId,
+    room_id: input.room.room_id,
+    room_number: input.room.room_number.slice(0, 32),
+    floor_name: input.room.floor_name.slice(0, 80),
+    title: cleanTitle.slice(0, 140),
+    maintenance_type: input.maintenance_type,
+    priority: input.priority,
+    scheduled_date: input.scheduled_date,
+    end_date: input.end_date,
+    status,
+    assigned_to: input.assigned_to.trim().slice(0, 120),
+    notes: input.notes.trim().slice(0, 500),
+    created_by: actor.email.slice(0, 160),
+    created_at: serverTimestamp(),
+    updated_at: serverTimestamp(),
+  };
+
+  try {
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'maintenance_schedules', scheduleId), docData);
+    if (
+      input.markRoomUnderMaintenance &&
+      input.room.building_allocation !== 'CR_BUILDING' &&
+      input.room.status !== 'INACTIVE'
+    ) {
+      batch.update(doc(db, 'rooms', input.room.room_id), {
+        status: 'UNDER MAINTENANCE',
+        updated_at: serverTimestamp(),
+      });
+    }
+    await batch.commit();
+  } catch (err) {
+    handleFirestoreError(
+      err,
+      OperationType.CREATE,
+      `maintenance_schedules/${scheduleId}`,
+    );
+  }
+
+  await writeAuditLog({
+    actorId: actor.admin_id,
+    actorEmail: actor.email,
+    actorRole: actor.role,
+    action: 'MAINTENANCE_SCHEDULED',
+    entityType: 'MAINTENANCE',
+    entityId: scheduleId,
+    detailsSummary: `Scheduled ${input.maintenance_type} maintenance for Room ${input.room.room_number} (${input.scheduled_date} to ${input.end_date}): ${cleanTitle}.`,
+  });
+
+  const nowIso = new Date().toISOString();
+  return {
+    ...docData,
+    created_at: nowIso,
+    updated_at: nowIso,
+  };
+}
+
+export async function updateMaintenanceScheduleStatusInFirestore(
+  schedule: MaintenanceSchedule,
+  nextStatus: MaintenanceStatus,
+  actor: AdminUser,
+  syncRoomStatus = true,
+): Promise<void> {
+  const schedRef = doc(db, 'maintenance_schedules', schedule.schedule_id);
+  try {
+    const batch = writeBatch(db);
+    batch.update(schedRef, {
+      status: nextStatus,
+      updated_at: serverTimestamp(),
+    });
+
+    if (syncRoomStatus) {
+      const roomRef = doc(db, 'rooms', schedule.room_id);
+      const roomSnap = await getDoc(roomRef);
+      if (roomSnap.exists()) {
+        const room = mapRoom(
+          roomSnap.data() as Record<string, unknown>,
+          roomSnap.id,
+        );
+        if (
+          nextStatus === 'IN_PROGRESS' &&
+          room.building_allocation !== 'CR_BUILDING' &&
+          room.status !== 'INACTIVE'
+        ) {
+          batch.update(roomRef, {
+            status: 'UNDER MAINTENANCE',
+            updated_at: serverTimestamp(),
+          });
+        } else if (
+          (nextStatus === 'COMPLETED' || nextStatus === 'CANCELLED') &&
+          room.status === 'UNDER MAINTENANCE'
+        ) {
+          batch.update(roomRef, {
+            status:
+              room.building_allocation === 'CR_BUILDING'
+                ? 'ALLOCATED TO CR BUILDING'
+                : 'AVAILABLE',
+            updated_at: serverTimestamp(),
+          });
+        }
+      }
+    }
+
+    await batch.commit();
+  } catch (err) {
+    handleFirestoreError(
+      err,
+      OperationType.UPDATE,
+      `maintenance_schedules/${schedule.schedule_id}`,
+    );
+  }
+
+  await writeAuditLog({
+    actorId: actor.admin_id,
+    actorEmail: actor.email,
+    actorRole: actor.role,
+    action: `MAINTENANCE_${nextStatus}`,
+    entityType: 'MAINTENANCE',
+    entityId: schedule.schedule_id,
+    detailsSummary: `Updated Room ${schedule.room_number} maintenance ("${schedule.title}") to ${nextStatus}.`,
+  });
+}
+
+export async function deleteMaintenanceScheduleInFirestore(
+  scheduleId: string,
+  actor: AdminUser,
+): Promise<void> {
+  try {
+    await deleteDoc(doc(db, 'maintenance_schedules', scheduleId));
+  } catch (err) {
+    handleFirestoreError(
+      err,
+      OperationType.DELETE,
+      `maintenance_schedules/${scheduleId}`,
+    );
+  }
+
+  await writeAuditLog({
+    actorId: actor.admin_id,
+    actorEmail: actor.email,
+    actorRole: actor.role,
+    action: 'MAINTENANCE_DELETED',
+    entityType: 'MAINTENANCE',
+    entityId: scheduleId,
+    detailsSummary: `Deleted maintenance schedule ${scheduleId}.`,
+  });
+}
+

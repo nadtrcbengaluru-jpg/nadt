@@ -6,6 +6,7 @@ import {
   FileBarChart,
   Globe,
   KeyRound,
+  LayoutDashboard,
   LogOut,
   Menu,
   ShieldAlert,
@@ -21,9 +22,11 @@ import {AuditLogsPanel} from './AuditLogsPanel.tsx';
 import {BookingsPanel} from './BookingsPanel.tsx';
 import {DashboardReportsPanel} from './DashboardReportsPanel.tsx';
 import {RoomInventoryPanel} from './RoomInventoryPanel.tsx';
+import {VisualDashboardPanel} from './VisualDashboardPanel.tsx';
 import {WebsiteCmsPanel} from './WebsiteCmsPanel.tsx';
 
 type WorkspaceSection =
+  | 'overview'
   | 'reports'
   | 'rooms'
   | 'bookings'
@@ -44,7 +47,7 @@ export function AdminWorkspace({
   onOpenPublicPortal,
 }: AdminWorkspaceProps) {
   const isSuperAdmin = admin.role === 'SUPER_ADMIN';
-  const [activeTab, setActiveTab] = useState<WorkspaceSection>('reports');
+  const [activeTab, setActiveTab] = useState<WorkspaceSection>('overview');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
 
@@ -74,7 +77,8 @@ export function AdminWorkspace({
     icon: typeof Users;
     badge?: number;
   }> = [
-    {id: 'reports', label: 'Dashboard & Reports', icon: FileBarChart},
+    {id: 'overview', label: 'Visual Dashboard', icon: LayoutDashboard},
+    {id: 'reports', label: 'Reports & Exports', icon: FileBarChart},
     {
       id: 'bookings',
       label: 'Booking Requests',
@@ -285,6 +289,19 @@ export function AdminWorkspace({
             </div>
           ) : (
             <>
+              {activeTab === 'overview' && snapshot && (
+                <VisualDashboardPanel
+                  admin={admin}
+                  rooms={snapshot.rooms}
+                  floors={snapshot.floors}
+                  categories={snapshot.categories}
+                  bookings={snapshot.bookings}
+                  maintenanceSchedules={snapshot.maintenanceSchedules}
+                  onRefresh={refreshSnapshot}
+                  onNavigate={(tab) => setActiveTab(tab)}
+                />
+              )}
+
               {activeTab === 'reports' && snapshot && (
                 <DashboardReportsPanel
                   rooms={snapshot.rooms}

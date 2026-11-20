@@ -164,3 +164,54 @@ export interface AuditLog {
   details_summary: string;
   created_at: string;
 }
+
+export type MaintenanceType =
+  | 'Electrical'
+  | 'Plumbing'
+  | 'HVAC / AC'
+  | 'Housekeeping'
+  | 'Furniture & Civil'
+  | 'Inspection';
+
+export type MaintenancePriority = 'LOW' | 'NORMAL' | 'HIGH' | 'URGENT';
+
+export type MaintenanceStatus =
+  | 'SCHEDULED'
+  | 'IN_PROGRESS'
+  | 'COMPLETED'
+  | 'CANCELLED';
+
+export interface MaintenanceSchedule {
+  schedule_id: string;
+  room_id: string;
+  room_number: string;
+  floor_name: string;
+  title: string;
+  maintenance_type: MaintenanceType;
+  priority: MaintenancePriority;
+  scheduled_date: string;
+  end_date: string;
+  status: MaintenanceStatus;
+  assigned_to: string;
+  notes: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BookingStatusCard {
+  booking_ref: string;
+  booking_id: string;
+  status: BookingStatus;
+  check_in_date: string;
+  check_out_date: string;
+  preferred_category: string;
+  rooms_required: number;
+  assigned_room_numbers: string[];
+  admin_remarks: string;
+  reviewed_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+
