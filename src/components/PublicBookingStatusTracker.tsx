@@ -16,6 +16,11 @@ import {
 } from 'lucide-react';
 import {lookupBookingStatusByRef} from '../lib/firestoreDb.ts';
 import {extractReadableError} from '../lib/firestoreError.ts';
+import {
+  readAllRecentRefs,
+  readSavedApplicantReceipts,
+  type SavedApplicantReceipt,
+} from '../lib/localBookingReceipts.ts';
 import type {BookingStatus, BookingStatusCard} from '../types/database.ts';
 
 interface PublicBookingStatusTrackerProps {
@@ -28,26 +33,14 @@ interface PublicBookingStatusTrackerProps {
 
 const RECENT_REFS_KEY = 'nadt_blr_recent_booking_refs';
 
-function readRecentRefs(): string[] {
-  try {
-    const raw = window.localStorage.getItem(RECENT_REFS_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter((x): x is string => typeof x === 'string').slice(0, 4);
-  } catch {
-    return [];
-  }
-}
-
 export function rememberRecentBookingRef(ref: string): void {
   try {
     const clean = ref.trim().toUpperCase();
     if (!clean) return;
-    const prev = readRecentRefs().filter((item) => item !== clean);
+    const prev = readAllRecentRefs().filter((item) => item !== clean);
     window.localStorage.setItem(
       RECENT_REFS_KEY,
-      JSON.stringify([clean, ...prev].slice(0, 4)),
+      JSON.stringify([clean, ...prev].slice(0, 8)),
     );
   } catch {
     // Ignore storage failures in private browsing modes
@@ -160,7 +153,10 @@ export function PublicBookingStatusTracker({
   const [notFoundRef, setNotFoundRef] = useState<string | null>(null);
   const [result, setResult] = useState<BookingStatusCard | null>(null);
   const [copied, setCopied] = useState(false);
-  const [recentRefs, setRecentRefs] = useState<string[]>(() => readRecentRefs());
+  const [recentRefs, setRecentRefs] = useState<string[]>(() => readAllRecentRefs());
+  const [savedReceipts, setSavedReceipts] = useState<SavedApplicantReceipt[]>(() =>
+    readSavedApplicantReceipts(),
+  );
 
   const runLookup = useCallback(async (rawRef: string) => {
     const clean = rawRef.trim().toUpperCase();
@@ -180,7 +176,8 @@ export function PublicBookingStatusTracker({
       } else {
         setResult(card);
         rememberRecentBookingRef(card.booking_ref);
-        setRecentRefs(readRecentRefs());
+        setRecentRefs(readAllRecentRefs());
+        setSavedReceipts(readSavedApplicantReceipts());
       }
     } catch (err) {
       setResult(null);
@@ -264,20 +261,29 @@ export function PublicBookingStatusTracker({
 
       {recentRefs.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-          <span>Recent on this device:</span>
-          {recentRefs.map((recent) => (
-            <button
-              key={recent}
-              type="button"
-              onClick={() => {
-                setRefInput(recent);
-                void runLookup(recent);
-              }}
-              className="px-2.5 py-1 font-mono text-xs text-[#0F2942] bg-slate-100 hover:bg-slate-200 rounded border border-slate-200 cursor-pointer transition-colors"
-            >
-              {recent}
-            </button>
-          ))}
+          <span>Your booking references on this device:</span>
+          {recentRefs.map((recent) => {
+            const matched = savedReceipts.find((r) => r.booking_ref === recent);
+            return (
+              <button
+                key={recent}
+                type="button"
+                onClick={() => {
+                  setRefInput(recent);
+                  void runLookup(recent);
+                }}
+                className="px-2.5 py-1 text-xs text-[#0F2942] bg-slate-100 hover:bg-slate-200 rounded border border-slate-200 cursor-pointer transition-colors"
+              >
+                {matched ? (
+                  <>
+                    <span className="font-semibold">{matched.applicant_name}</span>
+                    <span className="mx-1 text-slate-400">·</span>
+                  </>
+                ) : null}
+                <span className="font-mono font-semibold">{recent}</span>
+              </button>
+            );
+          })}
         </div>
       )}
 

@@ -2,6 +2,8 @@ import {useEffect, useState} from 'react';
 import {
   Building2,
   CalendarCheck,
+  Check,
+  Copy,
   Megaphone,
   Search,
   ShieldCheck,
@@ -10,6 +12,10 @@ import {
   fetchPublicBootstrap,
   type PublicBootstrapData,
 } from '../lib/firestoreDb.ts';
+import {
+  readSavedApplicantReceipts,
+  type SavedApplicantReceipt,
+} from '../lib/localBookingReceipts.ts';
 import {DEFAULT_SITE_SETTINGS, INITIAL_CATEGORIES} from '../lib/seedFirestore.ts';
 import {PublicBookingForm} from './PublicBookingForm.tsx';
 import {PublicBookingStatusTracker} from './PublicBookingStatusTracker.tsx';
@@ -28,6 +34,10 @@ export function PublicPortalShell({onOpenAdminLogin}: PublicPortalShellProps) {
     const params = new URLSearchParams(window.location.search);
     return (params.get('ref') || '').trim().toUpperCase();
   });
+  const [savedReceipts, setSavedReceipts] = useState<SavedApplicantReceipt[]>(() =>
+    readSavedApplicantReceipts(),
+  );
+  const [copiedSavedRef, setCopiedSavedRef] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -276,6 +286,76 @@ export function PublicPortalShell({onOpenAdminLogin}: PublicPortalShellProps) {
             </button>
           </div>
 
+          {savedReceipts.length > 0 && (
+            <div className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                  Your Booking Reference Numbers ({savedReceipts.length})
+                </div>
+                <span className="text-xs text-slate-500">
+                  Saved on this device for quick status tracking
+                </span>
+              </div>
+              <div className="divide-y divide-slate-100">
+                {savedReceipts.slice(0, 6).map((item) => (
+                  <div
+                    key={item.booking_ref}
+                    className="py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
+                  >
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 min-w-0">
+                      <span className="font-semibold text-slate-900">
+                        {item.applicant_name}
+                      </span>
+                      <span className="text-slate-300">·</span>
+                      <span className="font-mono font-bold text-[#0F2942] select-all">
+                        {item.booking_ref}
+                      </span>
+                      <span className="text-slate-300">·</span>
+                      <span className="font-mono text-slate-500 tabular-nums">
+                        {item.check_in_date} → {item.check_out_date}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            await navigator.clipboard.writeText(item.booking_ref);
+                            setCopiedSavedRef(item.booking_ref);
+                            window.setTimeout(() => setCopiedSavedRef(null), 2000);
+                          } catch {
+                            // Ignore clipboard denial
+                          }
+                        }}
+                        className="px-2.5 py-1 text-xs font-medium text-slate-700 bg-slate-50 border border-slate-200 rounded hover:bg-slate-100 inline-flex items-center gap-1 cursor-pointer"
+                      >
+                        {copiedSavedRef === item.booking_ref ? (
+                          <>
+                            <Check className="w-3 h-3 text-emerald-600" />
+                            Copied
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3 h-3" />
+                            Copy
+                          </>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => scrollToStatusTracker(item.booking_ref)}
+                        className="px-2.5 py-1 text-xs font-semibold text-white bg-[#0F2942] hover:bg-[#173a5c] rounded inline-flex items-center gap-1 cursor-pointer"
+                      >
+                        <Search className="w-3 h-3" />
+                        Check Status
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {facilityTab === 'request' ? (
             <PublicBookingForm
               categories={categories}
@@ -284,6 +364,7 @@ export function PublicPortalShell({onOpenAdminLogin}: PublicPortalShellProps) {
               showSpecialRequirements={settings.show_special_requirements}
               showApplicantRemarks={settings.show_applicant_remarks}
               onTrackStatus={(ref) => scrollToStatusTracker(ref)}
+              onReceiptsCreated={() => setSavedReceipts(readSavedApplicantReceipts())}
             />
           ) : (
             <PublicBookingStatusTracker

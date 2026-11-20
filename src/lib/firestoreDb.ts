@@ -447,7 +447,7 @@ export async function fetchPublicBootstrap(): Promise<PublicBootstrapData> {
 
 export async function submitPublicBooking(
   payload: PublicBookingPayload,
-): Promise<PublicBookingReceipt> {
+): Promise<PublicBookingReceipt & {applicant_name: string}> {
   const todayCompact = new Date().toISOString().slice(0, 10).replace(/-/g, '');
   const randomCode = generateSecureRefCode(8);
 
@@ -510,9 +510,21 @@ export async function submitPublicBooking(
   return {
     booking_id: bookingId,
     booking_ref: bookingRef,
+    applicant_name: docPayload.applicant_name,
     status: 'PENDING',
     created_at: new Date().toISOString(),
   };
+}
+
+export async function submitPublicBookingsBatch(
+  payloads: PublicBookingPayload[],
+): Promise<Array<PublicBookingReceipt & {applicant_name: string}>> {
+  const receipts: Array<PublicBookingReceipt & {applicant_name: string}> = [];
+  for (const payload of payloads) {
+    const receipt = await submitPublicBooking(payload);
+    receipts.push(receipt);
+  }
+  return receipts;
 }
 
 export async function lookupBookingStatusByRef(
