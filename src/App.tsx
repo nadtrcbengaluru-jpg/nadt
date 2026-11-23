@@ -4,6 +4,7 @@ import {auth} from './firebase.ts';
 import type {AdminUser} from './types/database.ts';
 import {ensureAdminProfile} from './lib/firestoreDb.ts';
 import {extractReadableError} from './lib/firestoreError.ts';
+import {clearGmailAccessToken} from './lib/gmailNotifier.ts';
 import {ErrorBoundary} from './components/ErrorBoundary.tsx';
 import {PublicPortalShell} from './components/PublicPortalShell.tsx';
 import {AdminLoginView} from './components/AdminLoginView.tsx';
@@ -26,6 +27,7 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (!active) return;
       if (!user) {
+        clearGmailAccessToken();
         setAdmin(null);
         if (initialPath.startsWith('/admin')) {
           setView((prev) => (prev === 'workspace' ? 'login' : prev));
@@ -44,6 +46,7 @@ export default function App() {
         }
       } catch (err) {
         if (!active) return;
+        clearGmailAccessToken();
         setAdmin(null);
         setAuthNotice(extractReadableError(err));
         await signOut(auth).catch(() => {});
@@ -79,6 +82,7 @@ export default function App() {
   };
 
   const handleLogout = async () => {
+    clearGmailAccessToken();
     await signOut(auth);
     setAdmin(null);
     window.history.pushState(null, '', '/admin');

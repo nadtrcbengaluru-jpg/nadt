@@ -2056,4 +2056,31 @@ export async function recordAdminExportAuditLog(
   });
 }
 
+export async function recordBookingEmailAuditLog(params: {
+  actor: AdminUser;
+  bookingId: string;
+  bookingRef: string;
+  recipientEmail: string;
+  decision: 'APPROVED' | 'REJECTED';
+  sent: boolean;
+  allottedRooms: string[];
+  errorMessage?: string;
+}): Promise<void> {
+  const roomsText =
+    params.decision === 'APPROVED'
+      ? ` Allotted Room(s): ${params.allottedRooms.join(', ') || 'None'}.`
+      : '';
+  await writeAuditLog({
+    actorId: params.actor.admin_id,
+    actorEmail: params.actor.email,
+    actorRole: params.actor.role,
+    action: params.sent ? 'BOOKING_EMAIL_SENT' : 'BOOKING_EMAIL_FAILED',
+    entityType: 'BOOKING',
+    entityId: params.bookingId,
+    detailsSummary: params.sent
+      ? `Sent ${params.decision} email notification for ${params.bookingRef} to ${params.recipientEmail}.${roomsText}`
+      : `Failed to send ${params.decision} email notification for ${params.bookingRef} to ${params.recipientEmail}: ${params.errorMessage || 'Unknown error'}`,
+  });
+}
+
 

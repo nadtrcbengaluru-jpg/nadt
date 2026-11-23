@@ -5,12 +5,17 @@ import firebaseConfig from '../firebase-applet-config.json';
 
 export const SUPER_ADMIN_EMAIL = 'nadtrc.bengaluru@gmail.com';
 export const FIREBASE_PROJECT_ID = firebaseConfig.projectId;
+export const GMAIL_SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send';
 
 export const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({prompt: 'select_account'});
+
+export const gmailProvider = new GoogleAuthProvider();
+gmailProvider.addScope(GMAIL_SEND_SCOPE);
+gmailProvider.setCustomParameters({prompt: 'consent'});
 
 let connectionChecked = false;
 

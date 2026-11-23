@@ -372,6 +372,7 @@ export function AdminWorkspace({
                   admin={admin}
                   bookings={snapshot.bookings}
                   categories={snapshot.categories}
+                  settings={snapshot.settings}
                   onRefresh={refreshSnapshot}
                 />
               )}

@@ -24,6 +24,10 @@ import {
 import type {AdminUser} from '../types/database.ts';
 import {ensureAdminProfile} from '../lib/firestoreDb.ts';
 import {extractReadableError} from '../lib/firestoreError.ts';
+import {
+  captureGmailTokenFromCredential,
+  clearGmailAccessToken,
+} from '../lib/gmailNotifier.ts';
 
 interface AdminLoginViewProps {
   initialNotice?: string | null;
@@ -108,9 +112,11 @@ export function AdminLoginView({
     setGoogleSubmitting(true);
     try {
       const cred = await signInWithPopup(auth, googleProvider);
+      captureGmailTokenFromCredential(cred);
       const adminProfile = await ensureAdminProfile(cred.user);
       onLoginSuccess(adminProfile);
     } catch (err: unknown) {
+      clearGmailAccessToken();
       setError(extractReadableError(err));
       await signOut(auth).catch(() => {});
     } finally {

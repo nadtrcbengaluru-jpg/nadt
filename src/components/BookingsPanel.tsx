@@ -1,11 +1,13 @@
-import {useMemo, useState} from 'react';
+import {useEffect, useMemo, useState} from 'react';
 import {
   AlertCircle,
   Calendar,
   CheckCircle2,
   Download,
+  Mail,
   RefreshCw,
   Search,
+  Send,
   X,
 } from 'lucide-react';
 import type {
@@ -13,21 +15,46 @@ import type {
   Booking,
   BookingStatus,
   RoomCategory,
+  SiteSettingsDoc,
 } from '../types/database.ts';
 import {exportBookingsToCsv} from '../lib/exportUtils.ts';
 import {
   checkRoomAvailabilityInFirestore,
   recordAdminExportAuditLog,
+  recordBookingEmailAuditLog,
   updateBookingInFirestore,
   type RoomAvailabilityItem,
 } from '../lib/firestoreDb.ts';
 import {extractReadableError} from '../lib/firestoreError.ts';
+import {
+  buildBookingDecisionEmailDraft,
+  buildMailtoFallbackUrl,
+  connectGmailAccountForSending,
+  getGmailConnectionState,
+  isValidEmailAddress,
+  sendBookingDecisionEmail,
+  subscribeGmailConnection,
+  type BookingEmailDraft,
+} from '../lib/gmailNotifier.ts';
 
 interface BookingsPanelProps {
   admin: AdminUser;
   bookings: Booking[];
   categories: RoomCategory[];
+  settings?: SiteSettingsDoc;
   onRefresh: () => Promise<void>;
+}
+
+interface PendingDecisionConfirmation {
+  booking: Booking;
+  decision: 'APPROVED' | 'REJECTED';
+  draft: BookingEmailDraft;
+  checkInDate: string;
+  checkOutDate: string;
+  roomsRequired: number;
+  adminRemarks: string;
+  selectedRoomIds: string[];
+  resendOnly: boolean;
 }
 
 const BOOKING_STATUS_OPTIONS: BookingStatus[] = [
@@ -52,6 +79,7 @@ export function BookingsPanel({
   admin,
   bookings,
   categories,
+  settings,
   onRefresh,
 }: BookingsPanelProps) {
   const [search, setSearch] = useState('');
@@ -62,6 +90,10 @@ export function BookingsPanel({
 
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+
+  // Gmail OAuth in-memory connection state
+  const [gmailState, setGmailState] = useState(() => getGmailConnectionState());
+  const [connectingGmail, setConnectingGmail] = useState(false);
 
   // Selected Booking Review Modal
   const [activeBooking, setActiveBooking] = useState<Booking | null>(null);
@@ -74,6 +106,24 @@ export function BookingsPanel({
   const [availabilityRooms, setAvailabilityRooms] = useState<RoomAvailabilityItem[]>([]);
   const [checkingAvailability, setCheckingAvailability] = useState(false);
   const [savingBooking, setSavingBooking] = useState(false);
+
+  // Explicit Email Confirmation Dialog State
+  const [pendingConfirmation, setPendingConfirmation] =
+    useState<PendingDecisionConfirmation | null>(null);
+  const [sendingDecisionEmail, setSendingDecisionEmail] = useState(false);
+
+  // Retryable failed email context (when Firestore status saved, but email failed)
+  const [retryEmailDraft, setRetryEmailDraft] = useState<{
+    booking: Booking;
+    draft: BookingEmailDraft;
+  } | null>(null);
+
+  useEffect(() => {
+    setGmailState(getGmailConnectionState());
+    return subscribeGmailConnection(() => {
+      setGmailState(getGmailConnectionState());
+    });
+  }, []);
 
   const filteredBookings = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -101,6 +151,21 @@ export function BookingsPanel({
     statusFilter !== 'ALL' ||
     categoryFilter !== 'ALL' ||
     dateFilter.length > 0;
+
+  const handleConnectGmail = async () => {
+    setError(null);
+    setConnectingGmail(true);
+    try {
+      const res = await connectGmailAccountForSending(admin.email);
+      setNotice(
+        `Gmail connected${res.senderEmail ? ` (${res.senderEmail})` : ''}. Approval and rejection emails will now be sent automatically after confirmation.`,
+      );
+    } catch (err) {
+      setError(extractReadableError(err));
+    } finally {
+      setConnectingGmail(false);
+    }
+  };
 
   const handleExportCsv = () => {
     setError(null);
@@ -175,6 +240,243 @@ export function BookingsPanel({
     );
   };
 
+  const resolveSelectedRoomNumbers = (
+    roomIds: string[],
+    fallbackBooking?: Booking,
+  ): string[] => {
+    if (roomIds.length === 0) return [];
+    const roomMap = new Map(availabilityRooms.map((r) => [r.room_id, r.room_number]));
+    const resolved = roomIds
+      .map((id) => roomMap.get(id))
+      .filter((num): num is string => Boolean(num));
+    if (resolved.length === roomIds.length) {
+      return resolved;
+    }
+    if (fallbackBooking && fallbackBooking.assigned_room_numbers.length > 0) {
+      return fallbackBooking.assigned_room_numbers;
+    }
+    return resolved;
+  };
+
+  const openDecisionEmailConfirmation = (
+    decision: 'APPROVED' | 'REJECTED',
+    resendOnly = false,
+  ) => {
+    if (!activeBooking) return;
+    setError(null);
+
+    if (!resendOnly) {
+      if (editCheckIn >= editCheckOut) {
+        setError('Check-out date must be after check-in date.');
+        return;
+      }
+      if (decision === 'APPROVED' && selectedRoomIds.length === 0) {
+        setError('Select at least one available room before approving.');
+        return;
+      }
+    }
+
+    const effectiveRoomIds = resendOnly
+      ? activeBooking.assigned_room_ids
+      : decision === 'REJECTED'
+        ? []
+        : selectedRoomIds;
+
+    const assignedRoomNumbers =
+      decision === 'APPROVED'
+        ? resendOnly
+          ? activeBooking.assigned_room_numbers
+          : resolveSelectedRoomNumbers(effectiveRoomIds, activeBooking)
+        : [];
+
+    const checkIn = resendOnly ? activeBooking.check_in_date : editCheckIn;
+    const checkOut = resendOnly ? activeBooking.check_out_date : editCheckOut;
+    const remarks = resendOnly ? activeBooking.admin_remarks : editAdminRemarks.trim();
+
+    const draft = buildBookingDecisionEmailDraft({
+      booking: activeBooking,
+      decision,
+      assignedRoomNumbers,
+      checkInDate: checkIn,
+      checkOutDate: checkOut,
+      adminRemarks: remarks,
+      settings,
+    });
+
+    setPendingConfirmation({
+      booking: activeBooking,
+      decision,
+      draft,
+      checkInDate: checkIn,
+      checkOutDate: checkOut,
+      roomsRequired: resendOnly ? activeBooking.rooms_required : editRoomsRequired,
+      adminRemarks: remarks,
+      selectedRoomIds: effectiveRoomIds,
+      resendOnly,
+    });
+  };
+
+  const handleConfirmDecision = async (sendEmail: boolean) => {
+    if (!pendingConfirmation) return;
+
+    const {
+      booking: targetBooking,
+      decision,
+      draft,
+      checkInDate,
+      checkOutDate,
+      roomsRequired,
+      adminRemarks,
+      selectedRoomIds: roomIdsToAssign,
+      resendOnly,
+    } = pendingConfirmation;
+
+    if (sendEmail && !isValidEmailAddress(draft.to)) {
+      setError(`Applicant email "${draft.to}" is invalid. Cannot send email notification.`);
+      return;
+    }
+
+    setSendingDecisionEmail(true);
+    setError(null);
+    setNotice(null);
+    setRetryEmailDraft(null);
+
+    let updatedBooking = targetBooking;
+
+    try {
+      if (!resendOnly) {
+        updatedBooking = await updateBookingInFirestore(
+          targetBooking.booking_id,
+          {
+            status: decision,
+            check_in_date: checkInDate,
+            check_out_date: checkOutDate,
+            rooms_required: roomsRequired,
+            admin_remarks: adminRemarks,
+            assigned_room_ids: decision === 'APPROVED' ? roomIdsToAssign : [],
+          },
+          admin,
+        );
+      }
+    } catch (err) {
+      setSendingDecisionEmail(false);
+      setError(extractReadableError(err));
+      return;
+    }
+
+    const finalDraft = buildBookingDecisionEmailDraft({
+      booking: updatedBooking,
+      decision,
+      assignedRoomNumbers: updatedBooking.assigned_room_numbers,
+      checkInDate: updatedBooking.check_in_date,
+      checkOutDate: updatedBooking.check_out_date,
+      adminRemarks: updatedBooking.admin_remarks,
+      settings,
+    });
+
+    if (!sendEmail) {
+      setPendingConfirmation(null);
+      setActiveBooking(null);
+      setNotice(
+        `Booking ${updatedBooking.booking_ref} updated to ${updatedBooking.status}${
+          updatedBooking.assigned_room_numbers.length
+            ? ` (Allotted Room(s): ${updatedBooking.assigned_room_numbers.join(', ')})`
+            : ''
+        }. Email notification was skipped.`,
+      );
+      setSendingDecisionEmail(false);
+      await onRefresh();
+      return;
+    }
+
+    try {
+      const emailRes = await sendBookingDecisionEmail(finalDraft);
+      await recordBookingEmailAuditLog({
+        actor: admin,
+        bookingId: updatedBooking.booking_id,
+        bookingRef: updatedBooking.booking_ref,
+        recipientEmail: finalDraft.to,
+        decision,
+        sent: true,
+        allottedRooms: updatedBooking.assigned_room_numbers,
+      });
+
+      setPendingConfirmation(null);
+      setActiveBooking(null);
+      setNotice(
+        `${
+          resendOnly
+            ? `Decision email re-sent`
+            : `Booking ${updatedBooking.booking_ref} ${updatedBooking.status}`
+        }${
+          decision === 'APPROVED' && updatedBooking.assigned_room_numbers.length
+            ? ` (Allotted Room(s): ${updatedBooking.assigned_room_numbers.join(', ')})`
+            : ''
+        }. Email notification sent to ${finalDraft.to}${
+          emailRes.senderEmail ? ` from ${emailRes.senderEmail}` : ''
+        }.`,
+      );
+      await onRefresh();
+    } catch (emailErr) {
+      const errMsg = extractReadableError(emailErr);
+      await recordBookingEmailAuditLog({
+        actor: admin,
+        bookingId: updatedBooking.booking_id,
+        bookingRef: updatedBooking.booking_ref,
+        recipientEmail: finalDraft.to,
+        decision,
+        sent: false,
+        allottedRooms: updatedBooking.assigned_room_numbers,
+        errorMessage: errMsg,
+      });
+
+      setPendingConfirmation(null);
+      setActiveBooking(null);
+      setRetryEmailDraft({booking: updatedBooking, draft: finalDraft});
+      setError(
+        `Booking ${updatedBooking.booking_ref} was saved as ${updatedBooking.status}${
+          updatedBooking.assigned_room_numbers.length
+            ? ` (Room(s): ${updatedBooking.assigned_room_numbers.join(', ')})`
+            : ''
+        }, but the email notification to ${finalDraft.to} could not be sent: ${errMsg}`,
+      );
+      await onRefresh();
+    } finally {
+      setSendingDecisionEmail(false);
+    }
+  };
+
+  const handleRetryFailedEmail = async () => {
+    if (!retryEmailDraft) return;
+    setError(null);
+    setSendingDecisionEmail(true);
+    try {
+      if (!getGmailConnectionState().connected) {
+        await connectGmailAccountForSending(admin.email);
+      }
+      const res = await sendBookingDecisionEmail(retryEmailDraft.draft);
+      await recordBookingEmailAuditLog({
+        actor: admin,
+        bookingId: retryEmailDraft.booking.booking_id,
+        bookingRef: retryEmailDraft.booking.booking_ref,
+        recipientEmail: retryEmailDraft.draft.to,
+        decision: retryEmailDraft.draft.decision,
+        sent: true,
+        allottedRooms: retryEmailDraft.draft.allottedRooms,
+      });
+      setNotice(
+        `Email notification sent to ${retryEmailDraft.draft.to} for ${retryEmailDraft.booking.booking_ref}${
+          res.senderEmail ? ` from ${res.senderEmail}` : ''
+        }.`,
+      );
+      setRetryEmailDraft(null);
+    } catch (err) {
+      setError(extractReadableError(err));
+    } finally {
+      setSendingDecisionEmail(false);
+    }
+  };
+
   const handleBookingAction = async (targetStatus: BookingStatus) => {
     if (!activeBooking) return;
     if (editCheckIn >= editCheckOut) {
@@ -227,11 +529,28 @@ export function BookingsPanel({
         <div>
           <h2 className="text-xl font-bold text-slate-900">Booking Requests &amp; Allocation</h2>
           <p className="text-sm text-slate-600 mt-1">
-            Review applicant requests, check date-wise availability, assign rooms, and manage
-            check-in/check-out status.
+            Review applicant requests, check date-wise availability, allot rooms, and send
+            approval or rejection email notifications.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+          <button
+            type="button"
+            disabled={connectingGmail}
+            onClick={() => void handleConnectGmail()}
+            className={`px-3.5 py-2 text-xs font-semibold rounded-lg inline-flex items-center gap-1.5 cursor-pointer border ${
+              gmailState.connected
+                ? 'text-emerald-800 bg-emerald-50 border-emerald-200 hover:bg-emerald-100'
+                : 'text-amber-900 bg-amber-50 border-amber-300 hover:bg-amber-100'
+            }`}
+          >
+            <Mail className="w-3.5 h-3.5" />
+            {connectingGmail
+              ? 'Connecting Gmail...'
+              : gmailState.connected
+                ? `Gmail Ready${gmailState.senderEmail ? ` (${gmailState.senderEmail})` : ''}`
+                : 'Connect Gmail for Email Alerts'}
+          </button>
           <button
             type="button"
             disabled={filteredBookings.length === 0}
@@ -256,9 +575,31 @@ export function BookingsPanel({
       </div>
 
       {error && (
-        <div className="p-3.5 rounded-lg bg-red-50 border border-red-200 text-sm text-red-800 flex items-start gap-2.5">
-          <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-600" />
-          <span>{error}</span>
+        <div className="p-3.5 rounded-lg bg-red-50 border border-red-200 text-sm text-red-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-start gap-2.5">
+            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-600" />
+            <span>{error}</span>
+          </div>
+          {retryEmailDraft && (
+            <div className="flex flex-wrap items-center gap-2 shrink-0 self-start sm:self-auto">
+              <a
+                href={buildMailtoFallbackUrl(retryEmailDraft.draft)}
+                className="px-3 py-1.5 text-xs font-semibold text-slate-800 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg inline-flex items-center gap-1.5"
+              >
+                <Mail className="w-3.5 h-3.5" />
+                Open Email Draft
+              </a>
+              <button
+                type="button"
+                disabled={sendingDecisionEmail}
+                onClick={() => void handleRetryFailedEmail()}
+                className="px-3 py-1.5 text-xs font-semibold text-white bg-[#0F2942] hover:bg-[#173a5c] rounded-lg inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <Send className="w-3.5 h-3.5" />
+                {sendingDecisionEmail ? 'Sending...' : 'Connect Gmail & Retry Email'}
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -430,8 +771,8 @@ export function BookingsPanel({
                 </div>
               </div>
               <div>
-                <div className="text-slate-500">Contact</div>
-                <div className="font-mono text-slate-900">
+                <div className="text-slate-500">Registered Contact</div>
+                <div className="font-mono text-slate-900 break-all">
                   {activeBooking.email} · {activeBooking.mobile}
                 </div>
               </div>
@@ -519,7 +860,7 @@ export function BookingsPanel({
               <label className="block text-xs font-medium text-slate-700 mb-1">
                 Admin Remarks{' '}
                 <span className="font-normal text-slate-500">
-                  (visible to applicant when checking booking status)
+                  (included in status tracker &amp; decision email to applicant)
                 </span>
               </label>
               <textarea
@@ -573,20 +914,43 @@ export function BookingsPanel({
               </div>
             </div>
 
+            {/* Email Notification Status Bar inside Modal */}
+            <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+              <div className="flex items-center gap-2 text-slate-700">
+                <Mail className="w-4 h-4 text-[#0F2942] shrink-0" />
+                <span>
+                  Approving or rejecting will send an email to{' '}
+                  <strong className="font-mono text-slate-900">{activeBooking.email}</strong>
+                  {' '}(including allotted room number on approval).
+                </span>
+              </div>
+              {!gmailState.connected && (
+                <button
+                  type="button"
+                  disabled={connectingGmail}
+                  onClick={() => void handleConnectGmail()}
+                  className="px-2.5 py-1 text-xs font-semibold text-amber-900 bg-amber-100 border border-amber-300 hover:bg-amber-200 rounded-md cursor-pointer whitespace-nowrap self-start sm:self-auto"
+                >
+                  {connectingGmail ? 'Connecting...' : 'Connect Gmail'}
+                </button>
+              )}
+            </div>
+
             {/* Action Buttons */}
             <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-slate-200">
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
-                  disabled={savingBooking}
-                  onClick={() => void handleBookingAction('REJECTED')}
-                  className="px-3.5 py-2 text-xs font-semibold text-red-700 bg-red-50 border border-red-200 hover:bg-red-100 rounded-lg cursor-pointer"
+                  disabled={savingBooking || sendingDecisionEmail}
+                  onClick={() => openDecisionEmailConfirmation('REJECTED', false)}
+                  className="px-3.5 py-2 text-xs font-semibold text-red-700 bg-red-50 border border-red-200 hover:bg-red-100 rounded-lg cursor-pointer inline-flex items-center gap-1.5"
                 >
-                  Reject
+                  <Mail className="w-3.5 h-3.5" />
+                  Reject &amp; Notify
                 </button>
                 <button
                   type="button"
-                  disabled={savingBooking}
+                  disabled={savingBooking || sendingDecisionEmail}
                   onClick={() => void handleBookingAction('CANCELLED')}
                   className="px-3.5 py-2 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
                 >
@@ -595,9 +959,23 @@ export function BookingsPanel({
               </div>
 
               <div className="flex flex-wrap gap-2">
+                {(activeBooking.status === 'APPROVED' ||
+                  activeBooking.status === 'REJECTED') && (
+                  <button
+                    type="button"
+                    disabled={savingBooking || sendingDecisionEmail}
+                    onClick={() =>
+                      openDecisionEmailConfirmation(activeBooking.status as 'APPROVED' | 'REJECTED', true)
+                    }
+                    className="px-3.5 py-2 text-xs font-semibold text-[#0F2942] bg-slate-100 border border-slate-300 hover:bg-slate-200 rounded-lg cursor-pointer inline-flex items-center gap-1.5"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                    Re-send Email
+                  </button>
+                )}
                 <button
                   type="button"
-                  disabled={savingBooking}
+                  disabled={savingBooking || sendingDecisionEmail}
                   onClick={() => void handleBookingAction(activeBooking.status)}
                   className="px-3.5 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-lg cursor-pointer"
                 >
@@ -605,15 +983,16 @@ export function BookingsPanel({
                 </button>
                 <button
                   type="button"
-                  disabled={savingBooking}
-                  onClick={() => void handleBookingAction('APPROVED')}
-                  className="px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg cursor-pointer"
+                  disabled={savingBooking || sendingDecisionEmail}
+                  onClick={() => openDecisionEmailConfirmation('APPROVED', false)}
+                  className="px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg cursor-pointer inline-flex items-center gap-1.5"
                 >
-                  Approve &amp; Assign Rooms
+                  <Mail className="w-3.5 h-3.5" />
+                  Approve, Assign Rooms &amp; Email
                 </button>
                 <button
                   type="button"
-                  disabled={savingBooking}
+                  disabled={savingBooking || sendingDecisionEmail}
                   onClick={() => void handleBookingAction('CHECKED-IN')}
                   className="px-4 py-2 text-xs font-semibold text-white bg-[#0F2942] hover:bg-[#173a5c] rounded-lg cursor-pointer"
                 >
@@ -621,11 +1000,156 @@ export function BookingsPanel({
                 </button>
                 <button
                   type="button"
-                  disabled={savingBooking}
+                  disabled={savingBooking || sendingDecisionEmail}
                   onClick={() => void handleBookingAction('CHECKED-OUT')}
                   className="px-4 py-2 text-xs font-semibold text-slate-900 bg-amber-100 border border-amber-300 hover:bg-amber-200 rounded-lg cursor-pointer"
                 >
                   Mark Checked-Out
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Explicit Confirmation Dialog for Sending Booking Decision Email */}
+      {pendingConfirmation && (
+        <div className="fixed inset-0 z-[60] bg-slate-900/60 flex items-center justify-center p-4">
+          <div className="bg-white border border-slate-200 rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6 space-y-5 shadow-xl">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 pb-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`px-2 py-0.5 text-[11px] font-bold rounded border ${
+                      pendingConfirmation.decision === 'APPROVED'
+                        ? 'text-emerald-800 bg-emerald-50 border-emerald-200'
+                        : 'text-red-800 bg-red-50 border-red-200'
+                    }`}
+                  >
+                    {pendingConfirmation.decision}
+                  </span>
+                  <h3 className="text-base font-bold text-slate-900">
+                    Confirm {pendingConfirmation.resendOnly ? 'Email Re-send' : 'Decision & Email Notification'}
+                  </h3>
+                </div>
+                <p className="text-xs text-slate-600 mt-1">
+                  Review the recipient, allotted room details, and email content before sending via Gmail.
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={sendingDecisionEmail}
+                onClick={() => setPendingConfirmation(null)}
+                className="p-1 text-slate-400 hover:text-slate-700 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200 rounded-lg p-3.5 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div>
+                <div className="text-slate-500">Recipient Registered Email</div>
+                <div className="font-mono font-semibold text-slate-900 break-all">
+                  {pendingConfirmation.draft.to}
+                </div>
+              </div>
+              <div>
+                <div className="text-slate-500">Booking Reference</div>
+                <div className="font-mono font-semibold text-slate-900">
+                  {pendingConfirmation.booking.booking_ref}
+                </div>
+              </div>
+              {pendingConfirmation.decision === 'APPROVED' && (
+                <div className="sm:col-span-2">
+                  <div className="text-slate-500">Allotted Room Number(s) Included in Email</div>
+                  <div className="font-mono font-bold text-emerald-800 text-sm mt-0.5">
+                    {pendingConfirmation.draft.allottedRooms.length > 0
+                      ? pendingConfirmation.draft.allottedRooms.join(', ')
+                      : 'None'}
+                  </div>
+                </div>
+              )}
+              <div className="sm:col-span-2">
+                <div className="text-slate-500">Email Subject</div>
+                <div className="font-medium text-slate-900">
+                  {pendingConfirmation.draft.subject}
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <div className="text-xs font-semibold text-slate-700 mb-1.5">
+                Email Message Preview
+              </div>
+              <pre className="p-3.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 whitespace-pre-wrap font-mono max-h-56 overflow-y-auto leading-relaxed">
+                {pendingConfirmation.draft.bodyText}
+              </pre>
+            </div>
+
+            {!gmailState.connected && (
+              <div className="p-3.5 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-950 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <span>
+                  Gmail send authorization is not active in this session yet. Connect Gmail once
+                  to send this notification directly to <strong>{pendingConfirmation.draft.to}</strong>.
+                </span>
+                <button
+                  type="button"
+                  disabled={connectingGmail}
+                  onClick={() => void handleConnectGmail()}
+                  className="px-3 py-1.5 text-xs font-semibold text-white bg-[#0F2942] hover:bg-[#173a5c] rounded-lg inline-flex items-center gap-1.5 cursor-pointer shrink-0 self-start sm:self-auto"
+                >
+                  <Mail className="w-3.5 h-3.5" />
+                  {connectingGmail ? 'Connecting...' : 'Connect Gmail'}
+                </button>
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-slate-200">
+              <button
+                type="button"
+                disabled={sendingDecisionEmail}
+                onClick={() => setPendingConfirmation(null)}
+                className="px-3.5 py-2 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+              >
+                Cancel
+              </button>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {!gmailState.connected && (
+                  <a
+                    href={buildMailtoFallbackUrl(pendingConfirmation.draft)}
+                    className="px-3.5 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg inline-flex items-center gap-1.5"
+                  >
+                    <Mail className="w-3.5 h-3.5" />
+                    Open Email Draft
+                  </a>
+                )}
+                {!pendingConfirmation.resendOnly && (
+                  <button
+                    type="button"
+                    disabled={sendingDecisionEmail}
+                    onClick={() => void handleConfirmDecision(false)}
+                    className="px-3.5 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg cursor-pointer"
+                  >
+                    Save Status Only (Skip Email)
+                  </button>
+                )}
+                <button
+                  type="button"
+                  disabled={sendingDecisionEmail || !gmailState.connected}
+                  onClick={() => void handleConfirmDecision(true)}
+                  className={`px-4 py-2 text-xs font-semibold text-white rounded-lg inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+                    pendingConfirmation.decision === 'APPROVED'
+                      ? 'bg-emerald-700 hover:bg-emerald-800'
+                      : 'bg-red-700 hover:bg-red-800'
+                  }`}
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  {sendingDecisionEmail
+                    ? 'Processing & Sending...'
+                    : pendingConfirmation.resendOnly
+                      ? 'Send Decision Email'
+                      : `Confirm ${pendingConfirmation.decision} & Send Email`}
                 </button>
               </div>
             </div>
