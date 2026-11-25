@@ -850,11 +850,7 @@ export function PublicBookingForm({
           disabled={submitting}
           className="px-6 py-2.5 text-sm font-semibold text-white bg-[#0F2942] hover:bg-[#173a5c] disabled:opacity-60 rounded-lg cursor-pointer whitespace-nowrap"
         >
-          {submitting
-            ? 'Generating Reference Number...'
-            : numPersons > 1 && numPersons <= 10 && separateRefPerPerson
-              ? `Submit & Issue ${numPersons} Reference Numbers`
-              : 'Submit & Get Reference Number'}
+          {submitting ? 'Submitting...' : 'Submit'}
         </button>
       </div>
     </form>
